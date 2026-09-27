@@ -1,10 +1,23 @@
 import { Router } from 'express'
 import { prisma } from '../../lib/prisma'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
+import { getDashboardOverview, getReportMetrics } from './dashboard.service'
 
 export const pipelineRouter = Router()
 
 pipelineRouter.use(requireAuth)
+
+pipelineRouter.get('/dashboard', async (req, res, next) => {
+  try {
+    const now = new Date()
+    const year = Number(req.query.year) || now.getUTCFullYear()
+    const month = Number(req.query.month) || now.getUTCMonth() + 1
+    const data = await getDashboardOverview(year, month)
+    res.json(data)
+  } catch (error) {
+    next(error)
+  }
+})
 
 function queryString(value: unknown) {
   return typeof value === 'string' ? value.trim() : undefined
@@ -207,54 +220,16 @@ pipelineRouter.get('/follow-ups', requirePermission('follow_up:view'), async (re
   }
 })
 
-pipelineRouter.get('/reports', requirePermission('report:view'), async (_req, res, next) => {
+pipelineRouter.get('/reports', requirePermission('report:view'), async (req, res, next) => {
   try {
-    const [leads, applications, followUps, payments] = await Promise.all([
-      prisma.lead.count(),
-      prisma.application.count(),
-      prisma.followUp.count({ where: { status: { in: ['Pending', 'Due Soon', 'Overdue'] } } }),
-      prisma.payment.count({ where: { status: 'Paid' } }),
-    ])
-
-    const items = [
-      {
-        id: 'metric-leads',
-        metric: 'Total leads',
-        period: 'All time',
-        value: String(leads),
-        change: '+12%',
-        owner: 'Counselling',
-        status: 'Active',
-      },
-      {
-        id: 'metric-apps',
-        metric: 'Applications submitted',
-        period: 'All time',
-        value: String(applications),
-        change: '+8',
-        owner: 'Operations',
-        status: 'Active',
-      },
-      {
-        id: 'metric-followups',
-        metric: 'Open follow-ups',
-        period: 'Current',
-        value: String(followUps),
-        change: '-3',
-        owner: 'Call Center',
-        status: 'Due Soon',
-      },
-      {
-        id: 'metric-payments',
-        metric: 'Paid invoices',
-        period: 'All time',
-        value: String(payments),
-        change: '+4%',
-        owner: 'Sales',
-        status: 'Active',
-      },
-    ]
-
+    const search = queryString(req.query.search)?.toLowerCase()
+    const items = (await getReportMetrics()).filter((row) => {
+      if (!search) return true
+      return [row.metric, row.period, row.value, row.owner, row.status]
+        .join(' ')
+        .toLowerCase()
+        .includes(search)
+    })
     res.json({ items, total: items.length })
   } catch (error) {
     next(error)
