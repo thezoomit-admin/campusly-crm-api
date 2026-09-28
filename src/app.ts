@@ -15,6 +15,7 @@ import { permissionsRouter } from './modules/permissions/permissions.routes'
 import { rolesRouter } from './modules/roles/roles.routes'
 import { searchRouter } from './modules/search/search.routes'
 import { usersRouter } from './modules/users/users.routes'
+import { leadsRouter } from './modules/leads/leads.routes'
 import { pipelineRouter } from './modules/pipeline/pipeline.routes'
 
 export function createApp() {
@@ -40,6 +41,7 @@ export function createApp() {
   app.use('/api/master-data', masterDataRouter)
   app.use('/api/audit-logs', auditRouter)
   app.use('/api/activities', activitiesRouter)
+  app.use('/api/leads', leadsRouter)
   app.use('/api/pipeline', pipelineRouter)
   app.use('/api/search', searchRouter)
 
@@ -53,6 +55,7 @@ export function createApp() {
         error: error.message,
         code: error.code,
         ...(error.fields ? { fields: error.fields } : {}),
+        ...(error.extra || {}),
       })
       return
     }

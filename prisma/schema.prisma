@@ -95,6 +95,8 @@ model Team {
   department   Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
   users        User[]
   employees    Employee[]
+  assignedLeads Lead[]                      @relation("LeadCountryTeam")
+  countryRules  CountryAssignmentRule[]
 
   @@index([departmentId])
   @@map("teams")
@@ -134,6 +136,13 @@ model User {
   masterDataUpdated   MasterDataItem[]       @relation("MasterDataUpdatedBy")
   employee            Employee?
   ownedLeads          Lead[]                 @relation("LeadOwner")
+  createdLeads        Lead[]                 @relation("LeadCreatedBy")
+  updatedLeads        Lead[]                 @relation("LeadUpdatedBy")
+  assignmentFrom      LeadAssignment[]       @relation("AssignmentFrom")
+  assignmentTo        LeadAssignment[]       @relation("AssignmentTo")
+  assignmentsMade     LeadAssignment[]       @relation("AssignmentActor")
+  qualificationHistory LeadQualificationHistory[]
+  defaultCountryRules CountryAssignmentRule[] @relation("CountryRuleDefaultOwner")
   counselledApplications Application[]       @relation("ApplicationCounsellor")
   counselledStudents  Student[]              @relation("StudentCounsellor")
   uploadedDocuments   CrmDocument[]          @relation("DocumentUploader")
@@ -431,21 +440,161 @@ model Lead {
   code      String   @unique
   name      String
   phone     String?
-  email     String?
-  country   String?
-  source    String?
-  ownerName String?  @map("owner_name")
-  ownerId   String?  @map("owner_id") @db.Uuid
-  status    String
-  notes     String?  @db.Text
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  owner     User?    @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  phoneNormalized     String?  @map("phone_normalized")
+  phoneCountryCode    String?  @map("phone_country_code")
+  whatsapp            String?
+  whatsappSameAsPhone Boolean  @default(false) @map("whatsapp_same_as_phone")
+  email               String?
+  dateOfBirth         DateTime? @map("date_of_birth") @db.Date
+  currentLocation     String?  @map("current_location")
+
+  country                 String?
+  preferredCountryCode    String?  @map("preferred_country_code")
+  preferredDegreeCode     String?  @map("preferred_degree_code")
+  preferredCourse         String?  @map("preferred_course")
+  preferredIntakeCode     String?  @map("preferred_intake_code")
+  studyPurposeCode        String?  @map("study_purpose_code")
+  studyPurposeOther       String?  @map("study_purpose_other")
+
+  highestQualificationCode String? @map("highest_qualification_code")
+  institutionName          String? @map("institution_name")
+  passingYear              Int?    @map("passing_year")
+  resultCgpa               String? @map("result_cgpa")
+  studyGapYears            Int?    @map("study_gap_years")
+
+  englishTestCode String?   @map("english_test_code")
+  testStatusCode  String?   @map("test_status_code")
+  overallScore    Float?    @map("overall_score")
+  testDate        DateTime? @map("test_date") @db.Date
+  listening       Float?
+  reading         Float?
+  writing         Float?
+  speaking        Float?
+
+  estimatedBudgetCode      String? @map("estimated_budget_code")
+  fundingSourceCode        String? @map("funding_source_code")
+  financialReadinessCode   String? @map("financial_readiness_code")
+
+  previouslyAppliedAbroad Boolean? @map("previously_applied_abroad")
+  previousVisaApplication Boolean? @map("previous_visa_application")
+  previousVisaRefusal     Boolean? @map("previous_visa_refusal")
+  prevVisaCountry         String?  @map("prev_visa_country")
+  prevVisaType            String?  @map("prev_visa_type")
+  prevVisaYear            Int?     @map("prev_visa_year")
+  prevVisaResult          String?  @map("prev_visa_result")
+  refusalCountry          String?  @map("refusal_country")
+  refusalYear             Int?     @map("refusal_year")
+  refusalReason           String?  @map("refusal_reason")
+
+  decisionTimelineCode       String? @map("decision_timeline_code")
+  decisionMakerCode          String? @map("decision_maker_code")
+  applicationReadinessCode   String? @map("application_readiness_code")
+  studyIntentCode            String? @map("study_intent_code")
+
+  preferredContactMethodCode String? @map("preferred_contact_method_code")
+  preferredContactTimeCode   String? @map("preferred_contact_time_code")
+  specificContactTime        String? @map("specific_contact_time")
+
+  source         String?
+  sourceCode     String?  @map("source_code")
+  sourceLocked   Boolean  @default(false) @map("source_locked")
+  campaign       String?
+  utmSource      String?  @map("utm_source")
+  utmMedium      String?  @map("utm_medium")
+  utmCampaign    String?  @map("utm_campaign")
+  remarks        String?  @db.Text
+  notes          String?  @db.Text
+
+  assignedCountryTeamId String? @map("assigned_country_team_id") @db.Uuid
+  ownerName             String? @map("owner_name")
+  ownerId               String? @map("owner_id") @db.Uuid
+  status                String  @default("New")
+  statusCode            String? @map("status_code")
+
+  academicFitCode            String? @map("academic_fit_code")
+  englishReadinessCode       String? @map("english_readiness_code")
+  countryIntakeFitCode       String? @map("country_intake_fit_code")
+  studyIntentQualCode        String? @map("study_intent_qual_code")
+  qualificationResultCode    String? @map("qualification_result_code")
+  unqualifiedReasonCode      String? @map("unqualified_reason_code")
+  unqualifiedRemarks         String? @map("unqualified_remarks") @db.Text
+
+  profileCompletion      Int     @default(0) @map("profile_completion")
+  leadScore              Int     @default(0) @map("lead_score")
+  priority               String?
+  priorityCode           String? @map("priority_code")
+  priorityManual         Boolean @default(false) @map("priority_manual")
+  priorityOverrideReason String? @map("priority_override_reason")
+
+  createdById String?  @map("created_by_id") @db.Uuid
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  owner               User?  @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  assignedCountryTeam Team?  @relation("LeadCountryTeam", fields: [assignedCountryTeamId], references: [id], onDelete: SetNull)
+  createdBy           User?  @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy           User?  @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  assignments         LeadAssignment[]
+  qualificationHistory LeadQualificationHistory[]
+  followUps           FollowUp[]
 
   @@index([status])
   @@index([ownerId])
   @@index([createdAt])
+  @@index([phoneNormalized])
+  @@index([preferredCountryCode])
+  @@index([sourceCode])
   @@map("leads")
+}
+
+model CountryAssignmentRule {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  countryCode    String   @unique @map("country_code")
+  teamId         String   @map("team_id") @db.Uuid
+  defaultOwnerId String?  @map("default_owner_id") @db.Uuid
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
+  team           Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  defaultOwner   User?    @relation("CountryRuleDefaultOwner", fields: [defaultOwnerId], references: [id], onDelete: SetNull)
+
+  @@index([teamId])
+  @@map("country_assignment_rules")
+}
+
+model LeadAssignment {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId      String   @map("lead_id") @db.Uuid
+  fromOwnerId String?  @map("from_owner_id") @db.Uuid
+  toOwnerId   String?  @map("to_owner_id") @db.Uuid
+  teamId      String?  @map("team_id") @db.Uuid
+  reason      String?
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fromOwner   User?    @relation("AssignmentFrom", fields: [fromOwnerId], references: [id], onDelete: SetNull)
+  toOwner     User?    @relation("AssignmentTo", fields: [toOwnerId], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("AssignmentActor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([leadId])
+  @@index([createdAt])
+  @@map("lead_assignments")
+}
+
+model LeadQualificationHistory {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId     String   @map("lead_id") @db.Uuid
+  result     String?
+  reason     String?
+  snapshot   Json?
+  createdById String? @map("created_by_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdBy  User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([leadId])
+  @@map("lead_qualification_history")
 }
 
 model Application {
@@ -524,18 +673,22 @@ model Payment {
 model FollowUp {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   contactName String   @map("contact_name")
+  leadId      String?  @map("lead_id") @db.Uuid
   type        String
   ownerName   String?  @map("owner_name")
   ownerId     String?  @map("owner_id") @db.Uuid
   dueAt       DateTime? @map("due_at")
   priority    String?
   status      String
+  notes       String?  @db.Text
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
   owner       User?    @relation("FollowUpOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  lead        Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([ownerId])
   @@index([dueAt])
+  @@index([leadId])
   @@map("follow_ups")
 }
