@@ -2,7 +2,13 @@ import { config } from '../../config'
 import { writeAuditLog } from '../../lib/audit'
 import { prisma } from '../../lib/prisma'
 import { dummyPasswordHash } from './dummy-hash'
-import { isEmailIdentifier, normalizeEmail, normalizeIdentifier, normalizeUsername } from './identifier'
+import {
+  isEmailIdentifier,
+  loginIdentifierValidationError,
+  normalizeEmail,
+  normalizeIdentifier,
+  normalizeUsername,
+} from './identifier'
 import { verifyPassword } from './password'
 import {
   buildAuthContext,
@@ -12,8 +18,6 @@ import {
   userAuthInclude,
   type AuthContext,
 } from './session.service'
-
-const GENERIC_LOGIN_ERROR = 'Invalid email/username or password'
 
 export type LoginInput = {
   identifier: unknown
@@ -35,16 +39,35 @@ export async function login(input: LoginInput) {
   const rememberMe = Boolean(input.rememberMe)
   const { ipAddress, userAgent } = input
 
-  if (!identifier || !password) {
+  if (!identifier) {
     return {
       ok: false as const,
       status: 400,
-      body: { error: 'Email/username and password are required', code: 'INVALID_INPUT' },
+      body: { error: 'Enter email or username', code: 'INVALID_INPUT', field: 'identifier' as const },
     }
   }
 
+  if (!password) {
+    return {
+      ok: false as const,
+      status: 400,
+      body: { error: 'Enter password', code: 'INVALID_INPUT', field: 'password' as const },
+    }
+  }
+
+  const identifierError = loginIdentifierValidationError(identifier)
+  if (identifierError) {
+    return {
+      ok: false as const,
+      status: 400,
+      body: { error: identifierError, code: 'INVALID_INPUT', field: 'identifier' as const },
+    }
+  }
+
+  const usingEmail = isEmailIdentifier(identifier)
+
   // Single joined query for credentials + auth graph (relationJoins → 1 DB round-trip).
-  const user = isEmailIdentifier(identifier)
+  const user = usingEmail
     ? await prisma.user.findUnique({
         where: { email: normalizeEmail(identifier) },
         include: userAuthInclude,
@@ -84,7 +107,7 @@ export async function login(input: LoginInput) {
         entityId: user.id,
         ipAddress,
         userAgent,
-        metadata: { identifierType: isEmailIdentifier(identifier) ? 'email' : 'username' },
+        metadata: { identifierType: usingEmail ? 'email' : 'username' },
       })
     } else {
       queueAuditLog({
@@ -98,7 +121,13 @@ export async function login(input: LoginInput) {
     return {
       ok: false as const,
       status: 401,
-      body: { error: GENERIC_LOGIN_ERROR, code: 'INVALID_CREDENTIALS' },
+      body: user
+        ? { error: 'Invalid password', code: 'INVALID_CREDENTIALS', field: 'password' as const }
+        : {
+            error: usingEmail ? 'Invalid email' : 'Invalid username',
+            code: 'INVALID_CREDENTIALS',
+            field: 'identifier' as const,
+          },
     }
   }
 
