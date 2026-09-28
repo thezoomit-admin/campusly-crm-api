@@ -6,15 +6,15 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "prod": "NODE_ENV=production node ./dist/server.js",
-    "migrate": "npx prisma migrate dev",
+    "migrate": "node scripts/prisma-with-env.cjs migrate dev",
     "start": "node dist/server.js",
-    "push": "npx prisma db push",
-    "generate": "prisma generate --generator client",
+    "push": "node scripts/prisma-with-env.cjs db push",
+    "generate": "node scripts/prisma-with-env.cjs generate --generator client",
     "generate:erd": "ts-node --transpile-only src/scripts/generateErDiagram.ts",
     "migrate:media-r2": "ts-node --transpile-only -r tsconfig-paths/register scripts/migrate-uploads-to-r2.ts",
-    "studio": "npx prisma studio",
+    "studio": "node scripts/prisma-with-env.cjs studio",
     "build": "tsc",
-    "validate": "npx prisma validate",
+    "validate": "node scripts/prisma-with-env.cjs validate",
     "seed": "ts-node --transpile-only prisma/seed.ts"
   },
   "dependencies": {

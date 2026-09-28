@@ -1,0 +1,128 @@
+import { Router } from 'express'
+import { requestIp, requestUserAgent, routeParam } from '../../lib/request'
+import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
+import {
+  checkDuplicate,
+  createLead,
+  createLeadFollowUp,
+  getLead,
+  listLeads,
+  updateLead,
+  updatePriority,
+  updateQualification,
+} from './leads.service'
+
+export const leadsRouter = Router()
+
+leadsRouter.use(requireAuth)
+
+function queryString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : undefined
+}
+
+function queryNumber(value: unknown) {
+  const num = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : NaN
+  return Number.isFinite(num) ? num : undefined
+}
+
+function body(req: { body: unknown }) {
+  return (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
+}
+
+leadsRouter.post('/duplicate-check', requirePermission('lead:create'), async (req, res, next) => {
+  try {
+    res.json(await checkDuplicate(req.auth!, body(req)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.get('/', requirePermission('lead:view'), async (req, res, next) => {
+  try {
+    res.json(
+      await listLeads(req.auth!, {
+        search: queryString(req.query.search),
+        page: queryNumber(req.query.page),
+        limit: queryNumber(req.query.limit),
+        status: queryString(req.query.status),
+        source: queryString(req.query.source),
+        priority: queryString(req.query.priority),
+        country: queryString(req.query.country),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.post('/', requirePermission('lead:create'), async (req, res, next) => {
+  try {
+    const result = await createLead(req.auth!, body(req), {
+      ipAddress: requestIp(req),
+      userAgent: requestUserAgent(req),
+    })
+    res.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.get('/:id', requirePermission('lead:view'), async (req, res, next) => {
+  try {
+    res.json(await getLead(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.patch('/:id', requirePermission('lead:edit'), async (req, res, next) => {
+  try {
+    res.json(
+      await updateLead(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.patch('/:id/qualification', requirePermission('lead:qualify'), async (req, res, next) => {
+  try {
+    res.json(
+      await updateQualification(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.patch('/:id/priority', requirePermission('lead:override_priority'), async (req, res, next) => {
+  try {
+    res.json(
+      await updatePriority(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.post('/:id/follow-ups', requirePermission('follow_up:create'), async (req, res, next) => {
+  try {
+    res.status(201).json(
+      await createLeadFollowUp(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})

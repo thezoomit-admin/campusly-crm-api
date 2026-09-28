@@ -20,6 +20,7 @@ activitiesRouter.get('/', requirePermission('activity:view'), async (req, res, n
       search: queryString(req.query.search),
       category: queryString(req.query.category),
       userId: queryString(req.query.userId),
+      relatedId: queryString(req.query.relatedId),
     })
     res.json(data)
   } catch (error) {

@@ -259,11 +259,13 @@ export async function listActivityFeed(
     search?: string
     category?: string
     userId?: string
+    relatedId?: string
   },
 ) {
   const now = new Date()
   const to = query.to ? new Date(`${query.to}T23:59:59.999`) : now
-  const from = query.from ? new Date(`${query.from}T00:00:00.000`) : new Date(to.getTime() - 6 * 86400000)
+  const defaultWindowMs = query.relatedId ? 365 * 86400000 : 6 * 86400000
+  const from = query.from ? new Date(`${query.from}T00:00:00.000`) : new Date(to.getTime() - defaultWindowMs)
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
     throw httpError.badRequest('Please select a valid date range.', 'INVALID_DATE_RANGE')
   }
@@ -274,10 +276,14 @@ export async function listActivityFeed(
   const scope = scopeWhere(auth)
   const userFilter = query.userId ? { userId: query.userId } : scope
 
+  const relatedFilter = query.relatedId ? { relatedId: query.relatedId } : {}
+  const auditRelatedFilter = query.relatedId ? { entityId: query.relatedId } : {}
+
   const [activities, audits] = await Promise.all([
     prisma.activity.findMany({
       where: {
         ...userFilter,
+        ...relatedFilter,
         occurredAt: { gte: prevFrom, lte: to },
       },
       include: {
@@ -289,6 +295,7 @@ export async function listActivityFeed(
     prisma.auditLog.findMany({
       where: {
         ...userFilter,
+        ...auditRelatedFilter,
         createdAt: { gte: prevFrom, lte: to },
       },
       include: {

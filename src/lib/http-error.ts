@@ -2,12 +2,14 @@ export class HttpError extends Error {
   status: number
   code: string
   fields?: Record<string, string>
+  extra?: Record<string, unknown>
 
-  constructor(status: number, message: string, code: string, fields?: Record<string, string>) {
+  constructor(status: number, message: string, code: string, fields?: Record<string, string>, extra?: Record<string, unknown>) {
     super(message)
     this.status = status
     this.code = code
     this.fields = fields
+    this.extra = extra
   }
 }
 
@@ -25,7 +27,10 @@ export const httpError = {
     return new HttpError(409, 'This username is already in use.', 'DUPLICATE_USERNAME')
   },
   duplicateEmail() {
-    return new HttpError(409, 'This email is already registered.', 'DUPLICATE_EMAIL')
+    return new HttpError(409, 'This email is already in use.', 'DUPLICATE_EMAIL')
+  },
+  duplicateLead(existingLead: { id: string; code: string; name: string; status: string }) {
+    return new HttpError(409, 'Similar lead already exists.', 'DUPLICATE_LEAD', undefined, { existingLead })
   },
   duplicateEmployeeEmail() {
     return new HttpError(409, 'This official email is already registered to an employee.', 'DUPLICATE_EMPLOYEE_EMAIL')

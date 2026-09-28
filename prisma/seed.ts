@@ -147,6 +147,133 @@ function daysAgo(days: number) {
   return date
 }
 
+function daysAgoAt(days: number, hours: number, minutes: number) {
+  const date = daysAgo(days)
+  date.setUTCHours(hours, minutes, 0, 0)
+  return date
+}
+
+const DEMO_LEAD_PROFILE: Record<
+  string,
+  {
+    email: string
+    priority: string
+    preferredCourse: string
+    englishTestCode: string
+    overallScore: number | null
+    source: string
+    createdAt: Date
+  }
+> = {
+  'L-1001': {
+    email: 'ayesha@example.com',
+    priority: 'High',
+    preferredCourse: 'BSc Computer Science',
+    englishTestCode: 'IELTS',
+    overallScore: 6.5,
+    source: 'Website',
+    createdAt: daysAgoAt(0, 10, 24),
+  },
+  'L-1002': {
+    email: 'hasan@example.com',
+    priority: 'Medium',
+    preferredCourse: 'Business',
+    englishTestCode: 'IELTS',
+    overallScore: 6,
+    source: 'Meta Ads',
+    createdAt: daysAgoAt(1, 9, 15),
+  },
+  'L-1009': {
+    email: 'farzana@example.com',
+    priority: 'High',
+    preferredCourse: 'HSC Waiting',
+    englishTestCode: 'SSC 2024',
+    overallScore: null,
+    source: 'Referral',
+    createdAt: daysAgoAt(2, 15, 42),
+  },
+  'L-1004': {
+    email: 'omar@example.com',
+    priority: 'Medium',
+    preferredCourse: 'Engineering',
+    englishTestCode: 'HSC 2023',
+    overallScore: null,
+    source: 'Website',
+    createdAt: daysAgoAt(2, 11, 20),
+  },
+  'L-1003': {
+    email: 'nusrat@example.com',
+    priority: 'High',
+    preferredCourse: 'BSc in CSE',
+    englishTestCode: 'IELTS',
+    overallScore: 6.5,
+    source: 'WhatsApp',
+    createdAt: daysAgoAt(4, 16, 30),
+  },
+  'L-1010': {
+    email: 'rakibul@example.com',
+    priority: 'Low',
+    preferredCourse: 'Diploma (Completed)',
+    englishTestCode: '',
+    overallScore: null,
+    source: 'Referral',
+    createdAt: daysAgoAt(5, 13, 10),
+  },
+  'L-1005': {
+    email: 'mithila@example.com',
+    priority: 'Medium',
+    preferredCourse: 'BSc in EEE',
+    englishTestCode: 'IELTS',
+    overallScore: 7,
+    source: 'Campaign',
+    createdAt: daysAgoAt(6, 8, 52),
+  },
+  'L-1006': {
+    email: 'sabbir@example.com',
+    priority: 'High',
+    preferredCourse: 'MBA',
+    englishTestCode: '',
+    overallScore: null,
+    source: 'Phone',
+    createdAt: daysAgoAt(7, 17, 18),
+  },
+  'L-1011': {
+    email: 'shila@example.com',
+    priority: 'Medium',
+    preferredCourse: 'BSc in EEE',
+    englishTestCode: '',
+    overallScore: null,
+    source: 'WhatsApp',
+    createdAt: daysAgoAt(8, 12, 5),
+  },
+  'L-1007': {
+    email: 'ruma@example.com',
+    priority: 'Low',
+    preferredCourse: 'Foundation Year',
+    englishTestCode: '',
+    overallScore: null,
+    source: 'Walk-in',
+    createdAt: daysAgoAt(9, 9, 40),
+  },
+}
+
+async function enrichDemoLeads() {
+  for (const [code, profile] of Object.entries(DEMO_LEAD_PROFILE)) {
+    await prisma.lead.updateMany({
+      where: { code, email: null },
+      data: {
+        email: profile.email,
+        priority: profile.priority,
+        preferredCourse: profile.preferredCourse,
+        englishTestCode: profile.englishTestCode || null,
+        overallScore: profile.overallScore,
+        source: profile.source,
+        createdAt: profile.createdAt,
+      },
+    })
+  }
+}
+
 function dateOnly(value: string) {
   return new Date(`${value}T00:00:00.000Z`)
 }
@@ -463,6 +590,7 @@ async function seedAuditLogs(adminUserId: string, actorIds: string[]) {
 async function seedPipelineDemo(userIds: string[]) {
   const leadCount = await prisma.lead.count()
   if (leadCount > 0) {
+    await enrichDemoLeads()
     return
   }
 
@@ -475,18 +603,18 @@ async function seedPipelineDemo(userIds: string[]) {
 
   await prisma.lead.createMany({
     data: [
-      { code: 'L-1001', name: 'Ayesha Siddiqua', phone: '01711-445566', country: 'Canada', source: 'Meta', ownerName: pick('sarah')?.fullName || 'Sarah Ahmed', ownerId: pick('sarah')?.id, status: 'New', updatedAt: daysAgo(0) },
-      { code: 'L-1002', name: 'Hasan Mahmud', phone: '01822-778899', country: 'UK', source: 'Website', ownerName: pick('rafiq')?.fullName || 'Rafiq Khan', ownerId: pick('rafiq')?.id, status: 'Contacted', updatedAt: daysAgo(0) },
-      { code: 'L-1003', name: 'Nusrat Jahan', phone: '01933-112233', country: 'Australia', source: 'WhatsApp', ownerName: pick('sarah')?.fullName || 'Sarah Ahmed', ownerId: pick('sarah')?.id, status: 'Counselling', updatedAt: daysAgo(1) },
-      { code: 'L-1004', name: 'Omar Faruk', phone: '01655-998877', country: 'Canada', source: 'Referral', ownerName: pick('call.exec')?.fullName || 'Fatima Begum', ownerId: pick('call.exec')?.id, status: 'Interested', updatedAt: daysAgo(1) },
-      { code: 'L-1005', name: 'Mithila Chowdhury', phone: '01566-334455', country: 'USA', source: 'Campaign', ownerName: pick('imran')?.fullName || 'Imran Ali', ownerId: pick('imran')?.id, status: 'Offer Sent', updatedAt: daysAgo(2) },
-      { code: 'L-1006', name: 'Sabbir Ahmed', phone: '01777-221100', country: 'Germany', source: 'Phone', ownerName: pick('sales.lead')?.fullName || 'Tanvir Islam', ownerId: pick('sales.lead')?.id, status: 'Follow-up', updatedAt: daysAgo(3) },
-      { code: 'L-1007', name: 'Ruma Akter', phone: '01888-667700', country: 'Canada', source: 'Walk-in', ownerName: pick('manager')?.fullName || 'Karim Hossain', ownerId: pick('manager')?.id, status: 'Converted', updatedAt: daysAgo(4) },
-      { code: 'L-1008', name: 'Tareq Hasan', phone: '01999-445500', country: 'UK', source: 'Meta', ownerName: pick('call.exec')?.fullName || 'Fatima Begum', ownerId: pick('call.exec')?.id, status: 'Lost', updatedAt: daysAgo(5) },
-      { code: 'L-1009', name: 'Farzana Kabir', phone: '01311-556677', country: 'Canada', source: 'Website', ownerName: pick('sarah')?.fullName || 'Sarah Ahmed', ownerId: pick('sarah')?.id, status: 'New', updatedAt: daysAgo(0) },
-      { code: 'L-1010', name: 'Rakibul Hasan', phone: '01422-889900', country: 'Australia', source: 'Referral', ownerName: pick('rafiq')?.fullName || 'Rafiq Khan', ownerId: pick('rafiq')?.id, status: 'Contacted', updatedAt: daysAgo(2) },
-      { code: 'L-1011', name: 'Shila Begum', phone: '01533-667788', country: 'UK', source: 'WhatsApp', ownerName: pick('manager')?.fullName || 'Karim Hossain', ownerId: pick('manager')?.id, status: 'Interested', updatedAt: daysAgo(3) },
-      { code: 'L-1012', name: 'Nayeem Chowdhury', phone: '01644-112244', country: 'USA', source: 'Campaign', ownerName: pick('imran')?.fullName || 'Imran Ali', ownerId: pick('imran')?.id, status: 'Counselling', updatedAt: daysAgo(4) },
+      { code: 'L-1001', name: 'Ayesha Siddiqua', phone: '01711-445566', email: 'ayesha@example.com', country: 'Canada', source: 'Website', ownerName: pick('sarah')?.fullName || 'Sarah Ahmed', ownerId: pick('sarah')?.id, status: 'New', priority: 'High', preferredCourse: 'BSc Computer Science', englishTestCode: 'IELTS', overallScore: 6.5, createdAt: daysAgoAt(0, 10, 24), updatedAt: daysAgo(0) },
+      { code: 'L-1002', name: 'Hasan Mahmud', phone: '01822-778899', email: 'hasan@example.com', country: 'UK', source: 'Meta Ads', ownerName: pick('rafiq')?.fullName || 'Rafiq Khan', ownerId: pick('rafiq')?.id, status: 'Contacted', priority: 'Medium', preferredCourse: 'Business', englishTestCode: 'IELTS', overallScore: 6, createdAt: daysAgoAt(1, 9, 15), updatedAt: daysAgo(0) },
+      { code: 'L-1003', name: 'Nusrat Jahan', phone: '01933-112233', email: 'nusrat@example.com', country: 'Australia', source: 'WhatsApp', ownerName: pick('sarah')?.fullName || 'Sarah Ahmed', ownerId: pick('sarah')?.id, status: 'Counselling', priority: 'High', preferredCourse: 'BSc in CSE', englishTestCode: 'IELTS', overallScore: 6.5, createdAt: daysAgoAt(4, 16, 30), updatedAt: daysAgo(1) },
+      { code: 'L-1004', name: 'Omar Faruk', phone: '01655-998877', email: 'omar@example.com', country: 'Canada', source: 'Website', ownerName: pick('call.exec')?.fullName || 'Fatima Begum', ownerId: pick('call.exec')?.id, status: 'Interested', priority: 'Medium', preferredCourse: 'Engineering', englishTestCode: 'HSC 2023', createdAt: daysAgoAt(2, 11, 20), updatedAt: daysAgo(1) },
+      { code: 'L-1005', name: 'Mithila Chowdhury', phone: '01566-334455', email: 'mithila@example.com', country: 'USA', source: 'Campaign', ownerName: pick('imran')?.fullName || 'Imran Ali', ownerId: pick('imran')?.id, status: 'Offer Sent', priority: 'Medium', preferredCourse: 'BSc in EEE', englishTestCode: 'IELTS', overallScore: 7, createdAt: daysAgoAt(6, 8, 52), updatedAt: daysAgo(2) },
+      { code: 'L-1006', name: 'Sabbir Ahmed', phone: '01777-221100', email: 'sabbir@example.com', country: 'Germany', source: 'Phone', ownerName: pick('sales.lead')?.fullName || 'Tanvir Islam', ownerId: pick('sales.lead')?.id, status: 'Follow-up', priority: 'High', preferredCourse: 'MBA', createdAt: daysAgoAt(7, 17, 18), updatedAt: daysAgo(3) },
+      { code: 'L-1007', name: 'Ruma Akter', phone: '01888-667700', email: 'ruma@example.com', country: 'Canada', source: 'Walk-in', ownerName: pick('manager')?.fullName || 'Karim Hossain', ownerId: pick('manager')?.id, status: 'Converted', priority: 'Low', preferredCourse: 'Foundation Year', createdAt: daysAgoAt(9, 9, 40), updatedAt: daysAgo(4) },
+      { code: 'L-1008', name: 'Tareq Hasan', phone: '01999-445500', email: 'tareq@example.com', country: 'UK', source: 'Meta', ownerName: pick('call.exec')?.fullName || 'Fatima Begum', ownerId: pick('call.exec')?.id, status: 'Lost', priority: 'Medium', createdAt: daysAgoAt(10, 11, 0), updatedAt: daysAgo(5) },
+      { code: 'L-1009', name: 'Farzana Kabir', phone: '01311-556677', email: 'farzana@example.com', country: 'Canada', source: 'Referral', ownerName: pick('sarah')?.fullName || 'Sarah Ahmed', ownerId: pick('sarah')?.id, status: 'New', priority: 'High', preferredCourse: 'HSC Waiting', englishTestCode: 'SSC 2024', createdAt: daysAgoAt(2, 15, 42), updatedAt: daysAgo(0) },
+      { code: 'L-1010', name: 'Rakibul Hasan', phone: '01422-889900', email: 'rakibul@example.com', country: 'Australia', source: 'Referral', ownerName: pick('rafiq')?.fullName || 'Rafiq Khan', ownerId: pick('rafiq')?.id, status: 'Contacted', priority: 'Low', preferredCourse: 'Diploma (Completed)', createdAt: daysAgoAt(5, 13, 10), updatedAt: daysAgo(2) },
+      { code: 'L-1011', name: 'Shila Begum', phone: '01533-667788', email: 'shila@example.com', country: 'UK', source: 'WhatsApp', ownerName: pick('manager')?.fullName || 'Karim Hossain', ownerId: pick('manager')?.id, status: 'Interested', priority: 'Medium', preferredCourse: 'BSc in EEE', createdAt: daysAgoAt(8, 12, 5), updatedAt: daysAgo(3) },
+      { code: 'L-1012', name: 'Nayeem Chowdhury', phone: '01644-112244', email: 'nayeem@example.com', country: 'USA', source: 'Campaign', ownerName: pick('imran')?.fullName || 'Imran Ali', ownerId: pick('imran')?.id, status: 'Counselling', priority: 'Medium', preferredCourse: 'Software Engineering', englishTestCode: 'IELTS', overallScore: 6, createdAt: daysAgoAt(8, 14, 20), updatedAt: daysAgo(4) },
     ],
   })
 
@@ -653,6 +781,23 @@ async function main() {
   }
 
   await upsertMasterDataSeeds()
+
+  const countryTeamMap: Array<{ countryCode: string; teamKey: string }> = [
+    { countryCode: 'CA', teamKey: 'canada_team' },
+    { countryCode: 'UK', teamKey: 'uk_team' },
+    { countryCode: 'AU', teamKey: 'team_a' },
+    { countryCode: 'US', teamKey: 'team_b' },
+    { countryCode: 'DE', teamKey: 'canada_team' },
+  ]
+  for (const rule of countryTeamMap) {
+    const team = await prisma.team.findUnique({ where: { key: rule.teamKey } })
+    if (!team) continue
+    await prisma.countryAssignmentRule.upsert({
+      where: { countryCode: rule.countryCode },
+      update: { teamId: team.id, isActive: true },
+      create: { countryCode: rule.countryCode, teamId: team.id, isActive: true },
+    })
+  }
 
   const adminRole = await prisma.role.findUniqueOrThrow({ where: { key: 'admin' } })
   const operationsDept = await prisma.department.findUniqueOrThrow({ where: { key: 'operations' } })
