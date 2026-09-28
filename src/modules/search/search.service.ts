@@ -8,6 +8,8 @@ const LIMIT = 6
 
 const MASTER_DATA_GROUP_SLUG: Record<string, string> = {
   'Lead Management': 'lead-management',
+  'Lead Qualification': 'lead-qualification',
+  'Lead Intent': 'lead-intent',
   Academic: 'academic',
   'Study Abroad': 'study-abroad',
   Service: 'service',
