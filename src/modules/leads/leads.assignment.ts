@@ -1,15 +1,23 @@
 import { prisma } from '../../lib/prisma'
 import { canReceiveLeadAssignment } from '../auth/access'
+import { CLOSED_ASSIGNMENT_STATUSES } from './lead-status'
 
-export async function resolveCountryAssignment(countryCode: string | null, fallbackUser: { id: string; fullName: string }) {
-  if (!countryCode) {
-    return {
-      ownerId: fallbackUser.id,
-      ownerName: fallbackUser.fullName,
-      teamId: null as string | null,
-      teamName: null as string | null,
-    }
-  }
+export type CountryAssignmentResult = {
+  ownerId: string | null
+  ownerName: string | null
+  teamId: string | null
+  teamName: string | null
+}
+
+const UNASSIGNED: CountryAssignmentResult = {
+  ownerId: null,
+  ownerName: null,
+  teamId: null,
+  teamName: null,
+}
+
+export async function resolveCountryAssignment(countryCode: string | null): Promise<CountryAssignmentResult> {
+  if (!countryCode) return UNASSIGNED
 
   const rule = await prisma.countryAssignmentRule.findUnique({
     where: { countryCode },
@@ -19,14 +27,7 @@ export async function resolveCountryAssignment(countryCode: string | null, fallb
     },
   })
 
-  if (!rule?.isActive) {
-    return {
-      ownerId: fallbackUser.id,
-      ownerName: fallbackUser.fullName,
-      teamId: null,
-      teamName: null,
-    }
-  }
+  if (!rule?.isActive) return UNASSIGNED
 
   if (rule.defaultOwner && canReceiveLeadAssignment(rule.defaultOwner.status)) {
     return {
@@ -40,8 +41,8 @@ export async function resolveCountryAssignment(countryCode: string | null, fallb
   const eligible = rule.team.users.filter((user) => canReceiveLeadAssignment(user.status))
   if (eligible.length === 0) {
     return {
-      ownerId: fallbackUser.id,
-      ownerName: fallbackUser.fullName,
+      ownerId: null,
+      ownerName: null,
       teamId: rule.teamId,
       teamName: rule.team.name,
     }
@@ -49,7 +50,10 @@ export async function resolveCountryAssignment(countryCode: string | null, fallb
 
   const counts = await prisma.lead.groupBy({
     by: ['ownerId'],
-    where: { ownerId: { in: eligible.map((user) => user.id) }, status: { notIn: ['Converted', 'Closed', 'Lost'] } },
+    where: {
+      ownerId: { in: eligible.map((user) => user.id) },
+      status: { notIn: [...CLOSED_ASSIGNMENT_STATUSES] },
+    },
     _count: { _all: true },
   })
   const countMap = new Map(counts.map((row) => [row.ownerId, row._count._all]))

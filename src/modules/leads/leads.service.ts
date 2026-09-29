@@ -1,6 +1,6 @@
 import type { Prisma } from '../../lib/prisma-client'
 import { writeAuditLog } from '../../lib/audit'
-import { httpError } from '../../lib/http-error'
+import { HttpError, httpError } from '../../lib/http-error'
 import { prisma } from '../../lib/prisma'
 import type { AuthContext } from '../auth/session.service'
 import { nextLeadCode } from './lead-code'
@@ -9,12 +9,19 @@ import {
   allowedFieldsFor,
   asOptionalString,
   asString,
+  assertCanManageLeadAssignment,
   assertCanViewLead,
+  assigneeVisibilityWhere,
   computeLeadScore,
+  FOLLOW_UP_CLOSED_STATUSES,
+  formatWaitingTime,
   hasPermission,
   isValidEmail,
   isValidMobile,
+  leadPoolScopeWhere,
   leadScopeWhere,
+  myLeadsOwnerWhere,
+  priorityRank,
   normalizePhone,
   parseBoolean,
   parseDateOnly,
@@ -26,6 +33,16 @@ import {
   throwIfInvalid,
   titleCaseName,
 } from './leads.helpers'
+import {
+  PIPELINE_STATUSES,
+  STATUS_MESSAGES,
+  describeStatusChange,
+  lostReasonRequiredFor,
+  missingQualifiedData,
+  remarksRequiredFor,
+  resolveLeadStatus,
+  type LeadStatusItem,
+} from './lead-status'
 
 type AuditMeta = { ipAddress?: string; userAgent?: string }
 
@@ -114,6 +131,7 @@ function serializeLead(lead: LeadRecord) {
     notes: lead.notes,
     status: lead.status,
     statusCode: lead.statusCode,
+    lostReasonCode: lead.lostReasonCode,
     academicFitCode: lead.academicFitCode,
     englishReadinessCode: lead.englishReadinessCode,
     countryIntakeFitCode: lead.countryIntakeFitCode,
@@ -136,7 +154,19 @@ function serializeLead(lead: LeadRecord) {
   }
 }
 
-const PIPELINE_STATUSES = ['New', 'Contacted', 'Interested', 'Counselling', 'Offer Sent', 'Converted'] as const
+async function loadLeadStatusItems(): Promise<LeadStatusItem[]> {
+  const rows = await prisma.masterDataItem.findMany({
+    where: { categoryKey: 'LEAD_STATUS' },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  })
+  return rows.map((row) => ({
+    name: row.name,
+    code: row.code,
+    behaviorKey: row.behaviorKey,
+    sortOrder: row.sortOrder,
+    status: row.status,
+  }))
+}
 
 function startOfUtcDay(date = new Date()) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
@@ -528,19 +558,34 @@ export async function listLeads(
 
 export async function getLead(auth: AuthContext, id: string) {
   await assertCanViewLead(auth, id)
-  const [lead, nextFollowUp] = await Promise.all([
+  await prisma.followUp.updateMany({
+    where: {
+      leadId: id,
+      status: { in: ['Pending', 'Due Soon'] },
+      dueAt: { lt: new Date() },
+    },
+    data: { status: 'Overdue' },
+  })
+  const [lead, nextFollowUp, statusItems] = await Promise.all([
     prisma.lead.findUniqueOrThrow({ where: { id }, include: leadInclude }),
     prisma.followUp.findFirst({
       where: {
         leadId: id,
-        status: { notIn: ['Done', 'Completed', 'Cancelled'] },
+        status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
       },
       orderBy: [{ dueAt: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }],
     }),
+    loadLeadStatusItems(),
   ])
   return {
     lead: {
       ...serializeLead(lead),
+      statusChange: describeStatusChange({
+        lead,
+        items: statusItems,
+        canUpdate: hasPermission(auth.permissions, 'lead:update_status'),
+        canOverride: hasPermission(auth.permissions, 'lead:override_status'),
+      }),
       nextFollowUp: nextFollowUp
         ? {
             id: nextFollowUp.id,
@@ -548,6 +593,11 @@ export async function getLead(auth: AuthContext, id: string) {
             dueAt: nextFollowUp.dueAt ? nextFollowUp.dueAt.toISOString() : null,
             status: nextFollowUp.status,
             notes: nextFollowUp.notes,
+            priority: nextFollowUp.priority,
+            purpose: nextFollowUp.purpose,
+            nextAction: nextFollowUp.nextAction,
+            reminder: nextFollowUp.reminder,
+            outcome: nextFollowUp.outcome,
           }
         : null,
     },
@@ -564,7 +614,7 @@ export async function createLead(auth: AuthContext, body: Record<string, unknown
     }
   }
 
-  const assignment = await resolveCountryAssignment(parsed.preferredCountryCode, auth.user)
+  const assignment = await resolveCountryAssignment(parsed.preferredCountryCode)
   const newStatus = await prisma.masterDataItem.findUnique({
     where: { categoryKey_code: { categoryKey: 'LEAD_STATUS', code: 'NEW' } },
   })
@@ -593,7 +643,7 @@ export async function createLead(auth: AuthContext, body: Record<string, unknown
         leadId: created.id,
         toOwnerId: assignment.ownerId,
         teamId: assignment.teamId,
-        reason: 'Country-based assignment on create',
+        reason: assignment.ownerId ? 'Country-based assignment on create' : 'Entered lead pool',
         createdById: auth.user.id,
       },
     })
@@ -608,6 +658,16 @@ export async function createLead(auth: AuthContext, body: Record<string, unknown
         outcome: 'Created',
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
+      },
+    })
+    await tx.leadStatusHistory.create({
+      data: {
+        leadId: created.id,
+        previousStatus: null,
+        previousStatusCode: null,
+        newStatus: created.status,
+        newStatusCode: created.statusCode || 'NEW',
+        createdById: auth.user.id,
       },
     })
     return created
@@ -653,7 +713,7 @@ export async function updateLead(auth: AuthContext, id: string, body: Record<str
   let assignedCountryTeamId = current.assignedCountryTeamId
   const countryChanged = parsed.preferredCountryCode && parsed.preferredCountryCode !== current.preferredCountryCode
   if (countryChanged) {
-    const assignment = await resolveCountryAssignment(parsed.preferredCountryCode, auth.user)
+    const assignment = await resolveCountryAssignment(parsed.preferredCountryCode)
     ownerId = assignment.ownerId
     ownerName = assignment.ownerName
     assignedCountryTeamId = assignment.teamId
@@ -682,7 +742,7 @@ export async function updateLead(auth: AuthContext, id: string, body: Record<str
           fromOwnerId: current.ownerId,
           toOwnerId: ownerId,
           teamId: assignedCountryTeamId,
-          reason: 'Preferred country changed',
+          reason: ownerId ? 'Preferred country changed' : 'Entered lead pool after country change',
           createdById: auth.user.id,
         },
       })
@@ -690,7 +750,7 @@ export async function updateLead(auth: AuthContext, id: string, body: Record<str
         data: {
           type: 'NOTE',
           userId: auth.user.id,
-          notes: `Lead reassigned after country change`,
+          notes: ownerId ? 'Lead reassigned after country change' : 'Lead moved to Lead Pool after country change',
           relatedName: updated.name,
           relatedType: 'lead',
           relatedId: updated.id,
@@ -835,48 +895,678 @@ export async function updatePriority(auth: AuthContext, id: string, body: Record
 }
 
 export async function createLeadFollowUp(auth: AuthContext, id: string, body: Record<string, unknown>, meta: AuditMeta) {
-  if (!hasPermission(auth.permissions, 'follow_up:create')) {
-    throw httpError.accessDenied()
+  const { createFollowUp } = await import('../follow-ups/follow-ups.service')
+  return createFollowUp(auth, { ...body, leadId: id }, meta)
+}
+
+export async function updateLeadStatus(auth: AuthContext, id: string, body: Record<string, unknown>, meta: AuditMeta) {
+  if (!hasPermission(auth.permissions, 'lead:update_status')) {
+    throw httpError.accessDenied(STATUS_MESSAGES.permission)
   }
-  const lead = await assertCanViewLead(auth, id)
-  const type = asString(body.type) || 'Call'
-  const dueAt = asString(body.dueAt) ? new Date(asString(body.dueAt)) : null
-  const followUp = await prisma.followUp.create({
-    data: {
-      leadId: lead.id,
-      contactName: lead.name,
-      type,
-      dueAt: dueAt && !Number.isNaN(dueAt.getTime()) ? dueAt : null,
-      priority: asOptionalString(body.priority, 20) || lead.priority || 'Medium',
-      status: 'Pending',
-      notes: asOptionalString(body.notes, 1000),
-      ownerId: lead.ownerId || auth.user.id,
-      ownerName: lead.ownerName || auth.user.fullName,
-    },
+
+  const currentLead = await assertCanViewLead(auth, id)
+  const items = await loadLeadStatusItems()
+  const current = resolveLeadStatus(currentLead, items)
+  const fields: Record<string, string> = {}
+  const statusCode = asString(body.statusCode)
+  if (!statusCode) fields.statusCode = STATUS_MESSAGES.missing
+  if (!current) fields.statusCode = fields.statusCode || STATUS_MESSAGES.missing
+  throwIfInvalid(fields)
+
+  const next = items.find((item) => item.code === statusCode && item.status === 'ACTIVE')
+  if (!next?.code) {
+    throw httpError.validation({ statusCode: STATUS_MESSAGES.missing })
+  }
+  if (next.code === current!.code) {
+    throw httpError.validation({ statusCode: STATUS_MESSAGES.same }, STATUS_MESSAGES.same)
+  }
+
+  const canOverride = hasPermission(auth.permissions, 'lead:override_status')
+  const overrideRequested = body.override === true || body.override === 'true'
+  const overrideReason = asString(body.overrideReason)
+  const allowed = describeStatusChange({
+    lead: currentLead,
+    items,
+    canUpdate: true,
+    canOverride,
   })
-  await prisma.activity.create({
-    data: {
-      type: 'FOLLOW_UP',
+  const option = allowed.options.find((item) => item.code === next.code)
+  if (!allowed.canUpdate) {
+    throw httpError.validation({ statusCode: allowed.lockedReason || STATUS_MESSAGES.jump }, allowed.lockedReason || STATUS_MESSAGES.jump)
+  }
+  if (!option) {
+    const gated = next.behaviorKey === 'converted'
+      ? STATUS_MESSAGES.converted
+      : next.behaviorKey === 'file_opening_pending'
+        ? STATUS_MESSAGES.fileOpening
+        : next.behaviorKey === 'file_opened'
+          ? STATUS_MESSAGES.fileOpened
+          : STATUS_MESSAGES.jump
+    throw httpError.validation({ statusCode: gated }, gated)
+  }
+  if (option.requiresOverride && !overrideRequested) {
+    throw httpError.validation({ statusCode: STATUS_MESSAGES.jump }, STATUS_MESSAGES.jump)
+  }
+  if (option.requiresOverride && !overrideReason) {
+    throw httpError.validation({ overrideReason: STATUS_MESSAGES.override })
+  }
+
+  const remarks = asString(body.remarks)
+  if (remarks.length > 1000) {
+    fields.remarks = 'Remarks cannot exceed 1000 characters.'
+  }
+  if (remarksRequiredFor(next.behaviorKey) && !remarks) {
+    fields.remarks = STATUS_MESSAGES.remarks
+  }
+
+  let lostReasonCode: string | null = null
+  if (lostReasonRequiredFor(next.behaviorKey)) {
+    const reason = await resolveMasterCode('LEAD_LOST_REASON', body.lostReasonCode, 'lostReasonCode', fields, {
+      required: true,
+      message: 'Please select a lost reason.',
+    })
+    lostReasonCode = reason?.code || null
+  }
+
+  if (next.code === 'QUALIFIED' && missingQualifiedData(currentLead)) {
+    fields.statusCode = STATUS_MESSAGES.qualifiedData
+  }
+  throwIfInvalid(fields)
+
+  try {
+    const lead = await prisma.$transaction(async (tx) => {
+      const updated = await tx.lead.update({
+        where: { id },
+        data: {
+          status: next.name,
+          statusCode: next.code,
+          lostReasonCode,
+          updatedById: auth.user.id,
+        },
+        include: leadInclude,
+      })
+      await tx.leadStatusHistory.create({
+        data: {
+          leadId: id,
+          previousStatus: current!.name,
+          previousStatusCode: current!.code,
+          newStatus: next.name,
+          newStatusCode: next.code!,
+          remarks: remarks || null,
+          lostReasonCode,
+          isOverride: Boolean(option.requiresOverride),
+          overrideReason: option.requiresOverride ? overrideReason : null,
+          createdById: auth.user.id,
+        },
+      })
+      await tx.activity.create({
+        data: {
+          type: 'NOTE',
+          userId: auth.user.id,
+          notes: `Status changed from ${current!.name} to ${next.name}${remarks ? `. ${remarks}` : ''}`,
+          relatedName: updated.name,
+          relatedType: 'lead',
+          relatedId: updated.id,
+          outcome: next.name,
+          metadata: {
+            previousStatus: current!.name,
+            previousStatusCode: current!.code,
+            newStatus: next.name,
+            newStatusCode: next.code,
+            remarks: remarks || null,
+            lostReasonCode,
+            isOverride: option.requiresOverride,
+          },
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+        },
+      })
+      return updated
+    })
+
+    await writeAuditLog({
       userId: auth.user.id,
-      notes: `Follow-up scheduled (${type})`,
-      relatedName: lead.name,
-      relatedType: 'lead',
-      relatedId: lead.id,
-      outcome: 'Scheduled',
-      nextAction: type,
-      nextDate: dueAt && !Number.isNaN(dueAt.getTime()) ? dueAt : null,
+      action: 'LEAD_STATUS_CHANGED',
+      entityType: 'lead',
+      entityId: lead.id,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
+      metadata: {
+        from: current!.name,
+        to: next.name,
+        previousStatusCode: current!.code,
+        newStatusCode: next.code,
+        remarks: remarks || null,
+        lostReasonCode,
+        override: option.requiresOverride,
+        overrideReason: option.requiresOverride ? overrideReason : null,
+        relatedName: lead.name,
+        name: lead.name,
+      },
+    })
+
+    return getLead(auth, id)
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    console.error(error)
+    throw httpError.statusUpdateFailed()
+  }
+}
+
+export async function listLeadStatusHistory(auth: AuthContext, id: string) {
+  await assertCanViewLead(auth, id)
+  const rows = await prisma.leadStatusHistory.findMany({
+    where: { leadId: id },
+    include: { createdBy: { select: { id: true, fullName: true } } },
+    orderBy: { createdAt: 'desc' },
+  })
+  const reasonCodes = [...new Set(rows.map((row) => row.lostReasonCode).filter((code): code is string => Boolean(code)))]
+  const reasons = reasonCodes.length
+    ? await prisma.masterDataItem.findMany({
+        where: { categoryKey: 'LEAD_LOST_REASON', code: { in: reasonCodes } },
+        select: { code: true, name: true },
+      })
+    : []
+  const reasonMap = new Map(reasons.map((item) => [item.code, item.name]))
+
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      previousStatus: row.previousStatus,
+      previousStatusCode: row.previousStatusCode,
+      newStatus: row.newStatus,
+      newStatusCode: row.newStatusCode,
+      remarks: row.remarks,
+      lostReasonCode: row.lostReasonCode,
+      lostReason: row.lostReasonCode ? reasonMap.get(row.lostReasonCode) || row.lostReasonCode : null,
+      isOverride: row.isOverride,
+      overrideReason: row.overrideReason,
+      updatedBy: row.createdBy ? { id: row.createdBy.id, name: row.createdBy.fullName } : null,
+      createdAt: row.createdAt.toISOString(),
+    })),
+  }
+}
+
+const ASSIGNEE_ROLE_KEYS = ['call_executive', 'counsellor'] as const
+const ACTIVITY_TYPE_LABEL: Record<string, string> = {
+  CALL: 'Call logged',
+  MESSAGE: 'Message sent',
+  MEETING: 'Meeting logged',
+  EMAIL: 'Email sent',
+  NOTE: 'Note added',
+  FOLLOW_UP: 'Follow-up scheduled',
+}
+
+function parseIsoDate(value?: string, endOfDay = false) {
+  const text = value?.trim()
+  if (!text || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return undefined
+  return new Date(`${text}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`)
+}
+
+function openFollowUpWhere(): Prisma.FollowUpWhereInput {
+  return { status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] } }
+}
+
+function followUpStatusLeadWhere(
+  status: string | undefined,
+  startToday: Date,
+  startTomorrow: Date,
+): Prisma.LeadWhereInput {
+  const key = status?.trim().toLowerCase()
+  const open = openFollowUpWhere()
+  if (key === 'pending') return { followUps: { some: open } }
+  if (key === 'today') {
+    return { followUps: { some: { AND: [open, { dueAt: { gte: startToday, lt: startTomorrow } }] } } }
+  }
+  if (key === 'overdue') {
+    return { followUps: { some: { AND: [open, { dueAt: { lt: startToday } }] } } }
+  }
+  return {}
+}
+
+function lastActivityLabel(activity: { type: string; notes: string | null; outcome: string | null }) {
+  const notes = activity.notes?.trim()
+  if (notes) return notes.length > 48 ? `${notes.slice(0, 45)}…` : notes
+  if (activity.outcome?.trim()) return activity.outcome.trim()
+  return ACTIVITY_TYPE_LABEL[activity.type] || 'Activity'
+}
+
+export async function listMyLeads(
+  auth: AuthContext,
+  query: {
+    search?: string
+    page?: number
+    limit?: number
+    status?: string
+    source?: string
+    priority?: string
+    country?: string
+    followUpStatus?: string
+    sort?: string
+    order?: string
+  },
+) {
+  if (!hasPermission(auth.permissions, 'lead:view')) {
+    throw httpError.accessDenied('You do not have permission to access this page.')
+  }
+
+  const search = query.search?.trim()
+  const page = Math.max(1, query.page || 1)
+  const limit = Math.min(50, Math.max(10, query.limit || 10))
+  const status = query.status?.trim()
+  const source = query.source?.trim()
+  const priority = query.priority?.trim()
+  const country = query.country?.trim()
+  const followUpStatus = query.followUpStatus?.trim()
+  const sort = query.sort?.trim().toLowerCase() === 'priority' ? 'priority' : 'assigned'
+  const order = query.order?.trim().toLowerCase() === 'asc' ? 'asc' : 'desc'
+
+  await prisma.followUp.updateMany({
+    where: {
+      status: { in: ['Pending', 'Due Soon'] },
+      dueAt: { lt: new Date() },
+      lead: myLeadsOwnerWhere(auth),
     },
+    data: { status: 'Overdue' },
   })
-  await writeAuditLog({
-    userId: auth.user.id,
-    action: 'FOLLOW_UP_CREATED',
-    entityType: 'lead',
-    entityId: lead.id,
-    ipAddress: meta.ipAddress,
-    userAgent: meta.userAgent,
-    metadata: { followUpId: followUp.id, type },
+  const ownerWhere = myLeadsOwnerWhere(auth)
+  const now = new Date()
+  const startToday = startOfUtcDay(now)
+  const startTomorrow = addUtcDays(startToday, 1)
+  const searchDigits = search ? search.replace(/\D/g, '') : ''
+
+  const listWhere: Prisma.LeadWhereInput = {
+    AND: [
+      ownerWhere,
+      status ? { status: { equals: status, mode: 'insensitive' } } : {},
+      source ? { source: { contains: source, mode: 'insensitive' } } : {},
+      priority ? { priority: { equals: priority, mode: 'insensitive' } } : {},
+      country ? { country: { contains: country, mode: 'insensitive' } } : {},
+      followUpStatusLeadWhere(followUpStatus, startToday, startTomorrow),
+      search
+        ? {
+            OR: [
+              { code: { contains: search, mode: 'insensitive' } },
+              { name: { contains: search, mode: 'insensitive' } },
+              { phone: { contains: search, mode: 'insensitive' } },
+              ...(searchDigits.length >= 3 ? [{ phoneNormalized: { contains: searchDigits } }] : []),
+            ],
+          }
+        : {},
+    ],
+  }
+
+  try {
+    const matching = await prisma.lead.findMany({
+      where: listWhere,
+      select: { id: true, createdAt: true, priority: true },
+    })
+
+    const assignmentDates =
+      matching.length === 0
+        ? []
+        : await prisma.leadAssignment.groupBy({
+            by: ['leadId'],
+            where: { leadId: { in: matching.map((lead) => lead.id) }, toOwnerId: auth.user.id },
+            _max: { createdAt: true },
+          })
+    const assignedAt = new Map(
+      assignmentDates.map((row) => [row.leadId, row._max.createdAt?.getTime() || 0]),
+    )
+
+    const direction = order === 'asc' ? 1 : -1
+    matching.sort((a, b) => {
+      if (sort === 'priority') {
+        const diff = (priorityRank(a.priority) - priorityRank(b.priority)) * direction
+        if (diff !== 0) return diff
+      }
+      const aTime = assignedAt.get(a.id) || a.createdAt.getTime()
+      const bTime = assignedAt.get(b.id) || b.createdAt.getTime()
+      return (aTime - bTime) * (sort === 'priority' ? -1 : direction)
+    })
+
+    const total = matching.length
+    const pageIds = matching.slice((page - 1) * limit, page * limit).map((lead) => lead.id)
+    const [rows, nextFollowUps, lastActivities, summary] = await Promise.all([
+      pageIds.length
+        ? prisma.lead.findMany({
+            where: { id: { in: pageIds } },
+            include: leadInclude,
+          })
+        : Promise.resolve([]),
+      pageIds.length
+        ? prisma.followUp.findMany({
+            where: { leadId: { in: pageIds }, AND: [openFollowUpWhere()] },
+            orderBy: [{ dueAt: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }],
+          })
+        : Promise.resolve([]),
+      pageIds.length
+        ? prisma.activity.findMany({
+            where: { relatedType: 'lead', relatedId: { in: pageIds } },
+            orderBy: { occurredAt: 'desc' },
+          })
+        : Promise.resolve([]),
+      Promise.all([
+        prisma.lead.count({ where: ownerWhere }),
+        prisma.lead.count({
+          where: { AND: [ownerWhere, { priority: { equals: 'High', mode: 'insensitive' } }] },
+        }),
+        prisma.followUp.count({ where: { AND: [openFollowUpWhere(), { lead: ownerWhere }] } }),
+        prisma.followUp.count({
+          where: {
+            AND: [openFollowUpWhere(), { dueAt: { gte: startToday, lt: startTomorrow } }, { lead: ownerWhere }],
+          },
+        }),
+        prisma.followUp.count({
+          where: { AND: [openFollowUpWhere(), { dueAt: { lt: startToday } }, { lead: ownerWhere }] },
+        }),
+      ]).then(([totalAssigned, highPriority, pendingFollowUps, todayFollowUps, overdueFollowUps]) => ({
+        totalAssigned,
+        highPriority,
+        pendingFollowUps,
+        todayFollowUps,
+        overdueFollowUps,
+      })),
+    ])
+
+    const byId = new Map(rows.map((lead) => [lead.id, lead]))
+    const nextByLead = new Map<string, (typeof nextFollowUps)[number]>()
+    for (const followUp of nextFollowUps) {
+      if (followUp.leadId && !nextByLead.has(followUp.leadId)) nextByLead.set(followUp.leadId, followUp)
+    }
+    const activityByLead = new Map<string, (typeof lastActivities)[number]>()
+    for (const activity of lastActivities) {
+      if (activity.relatedId && !activityByLead.has(activity.relatedId)) {
+        activityByLead.set(activity.relatedId, activity)
+      }
+    }
+
+    return {
+      items: pageIds.flatMap((id) => {
+        const lead = byId.get(id)
+        if (!lead) return []
+        const next = nextByLead.get(id)
+        const activity = activityByLead.get(id)
+        const assignedMs = assignedAt.get(id)
+        return [
+          {
+            id: lead.id,
+            code: lead.code,
+            name: lead.name,
+            phone: lead.phone || '—',
+            country: lead.country || '—',
+            status: lead.status,
+            score: lead.leadScore ?? 0,
+            priority: lead.priority || '—',
+            nextFollowUpAt: next?.dueAt ? next.dueAt.toISOString() : null,
+            lastActivity: activity ? lastActivityLabel(activity) : '—',
+            lastActivityAt: activity ? activity.occurredAt.toISOString() : null,
+            assignedAt: assignedMs ? new Date(assignedMs).toISOString() : lead.createdAt.toISOString(),
+          },
+        ]
+      }),
+      total,
+      page,
+      limit,
+      summary,
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    console.error(error)
+    throw search ? httpError.myLeadsSearchFailed() : httpError.myLeadsLoadFailed()
+  }
+}
+
+export async function listLeadPool(
+  auth: AuthContext,
+  query: {
+    search?: string
+    page?: number
+    limit?: number
+    source?: string
+    country?: string
+    createdFrom?: string
+    createdTo?: string
+  },
+) {
+  if (!hasPermission(auth.permissions, 'lead:assign')) {
+    throw httpError.accessDenied('You do not have permission to access the Lead Pool.')
+  }
+
+  try {
+    const search = query.search?.trim()
+    const page = Math.max(1, query.page || 1)
+    const limit = Math.min(50, Math.max(10, query.limit || 10))
+    const source = query.source?.trim()
+    const country = query.country?.trim()
+    const createdFrom = parseIsoDate(query.createdFrom)
+    const createdTo = parseIsoDate(query.createdTo, true)
+
+    const listWhere: Prisma.LeadWhereInput = {
+      AND: [
+        leadPoolScopeWhere(auth),
+        source ? { source: { contains: source, mode: 'insensitive' } } : {},
+        country ? { country: { contains: country, mode: 'insensitive' } } : {},
+        createdFrom || createdTo
+          ? {
+              createdAt: {
+                ...(createdFrom ? { gte: createdFrom } : {}),
+                ...(createdTo ? { lte: createdTo } : {}),
+              },
+            }
+          : {},
+        search
+          ? {
+              OR: [
+                { code: { contains: search, mode: 'insensitive' } },
+                { name: { contains: search, mode: 'insensitive' } },
+                { phone: { contains: search, mode: 'insensitive' } },
+              ],
+            }
+          : {},
+      ],
+    }
+
+    const [total, rows] = await Promise.all([
+      prisma.lead.count({ where: listWhere }),
+      prisma.lead.findMany({
+        where: listWhere,
+        include: leadInclude,
+        orderBy: { createdAt: 'asc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ])
+
+    return {
+      items: rows.map((lead) => ({
+        id: lead.id,
+        code: lead.code,
+        name: lead.name,
+        phone: lead.phone || '—',
+        country: lead.country || '—',
+        source: lead.source || '—',
+        assignedTeam: lead.assignedCountryTeam
+          ? { id: lead.assignedCountryTeam.id, name: lead.assignedCountryTeam.name }
+          : null,
+        createdAt: lead.createdAt.toISOString(),
+        waitingTime: formatWaitingTime(lead.createdAt),
+      })),
+      total,
+      page,
+      limit,
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    console.error(error)
+    throw httpError.leadPoolLoadFailed()
+  }
+}
+
+export async function listLeadAssignees(auth: AuthContext, query: { teamId?: string; search?: string }) {
+  if (!hasPermission(auth.permissions, ['lead:assign', 'lead:reassign'])) {
+    throw httpError.accessDenied()
+  }
+
+  const search = query.search?.trim()
+  const teamId = query.teamId?.trim()
+  const users = await prisma.user.findMany({
+    where: {
+      status: 'ACTIVE',
+      AND: [
+        assigneeVisibilityWhere(auth),
+        { primaryRole: { key: { in: [...ASSIGNEE_ROLE_KEYS] } } },
+        teamId ? { teamId } : {},
+        search
+          ? {
+              OR: [
+                { fullName: { contains: search, mode: 'insensitive' } },
+                { email: { contains: search, mode: 'insensitive' } },
+              ],
+            }
+          : {},
+      ],
+    },
+    include: {
+      primaryRole: { select: { key: true, name: true } },
+      team: { select: { id: true, name: true } },
+    },
+    orderBy: { fullName: 'asc' },
   })
-  return { followUp }
+
+  return {
+    items: users.map((user) => ({
+      id: user.id,
+      name: user.fullName,
+      role: user.primaryRole ? { key: user.primaryRole.key, name: user.primaryRole.name } : null,
+      team: user.team ? { id: user.team.id, name: user.team.name } : null,
+    })),
+  }
+}
+
+export async function assignLead(auth: AuthContext, id: string, body: Record<string, unknown>, meta: AuditMeta) {
+  const { lead: current, canAssign, canReassign } = await assertCanManageLeadAssignment(auth, id)
+  const isUnassigned = !current.ownerId
+  if (isUnassigned && !canAssign) {
+    throw httpError.accessDenied()
+  }
+  if (!isUnassigned && !canReassign) {
+    throw httpError.accessDenied()
+  }
+
+  const ownerId = asString(body.ownerId)
+  const fields: Record<string, string> = {}
+  if (!ownerId) fields.ownerId = 'Please select a user to assign this lead.'
+  throwIfInvalid(fields)
+  if (ownerId === current.ownerId) {
+    throw httpError.validation({ ownerId: 'This lead is already assigned to the selected user.' })
+  }
+
+  const assignee = await prisma.user.findFirst({
+    where: {
+      id: ownerId,
+      status: 'ACTIVE',
+      AND: [assigneeVisibilityWhere(auth)],
+    },
+    include: { team: { select: { id: true, name: true } } },
+  })
+  if (!assignee) {
+    throw httpError.badRequest('The selected user cannot receive this lead.')
+  }
+
+  const reason =
+    asOptionalString(body.reason, 400) ||
+    (isUnassigned ? 'Assigned from Lead Pool' : 'Lead reassigned')
+  const fromOwnerId = current.ownerId
+  const fromOwnerName = current.ownerName
+  const teamId = assignee.teamId || current.assignedCountryTeamId
+
+  try {
+    const lead = await prisma.$transaction(async (tx) => {
+      const updated = await tx.lead.update({
+        where: { id },
+        data: {
+          ownerId: assignee.id,
+          ownerName: assignee.fullName,
+          assignedCountryTeamId: teamId,
+          updatedById: auth.user.id,
+        },
+        include: leadInclude,
+      })
+      await tx.leadAssignment.create({
+        data: {
+          leadId: id,
+          fromOwnerId,
+          toOwnerId: assignee.id,
+          teamId,
+          reason,
+          createdById: auth.user.id,
+        },
+      })
+      await tx.activity.create({
+        data: {
+          type: 'NOTE',
+          userId: auth.user.id,
+          notes: isUnassigned
+            ? `Lead assigned to ${assignee.fullName}`
+            : `Lead reassigned from ${fromOwnerName || 'Unassigned'} to ${assignee.fullName}`,
+          relatedName: updated.name,
+          relatedType: 'lead',
+          relatedId: updated.id,
+          outcome: 'Assigned',
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+        },
+      })
+      return updated
+    })
+
+    await writeAuditLog({
+      userId: auth.user.id,
+      action: 'LEAD_ASSIGNED',
+      entityType: 'lead',
+      entityId: lead.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: {
+        code: lead.code,
+        fromOwnerId,
+        toOwnerId: assignee.id,
+        toOwnerName: assignee.fullName,
+        reason,
+        relatedName: lead.name,
+        name: lead.name,
+      },
+    })
+
+    return { lead: serializeLead(lead), message: isUnassigned ? 'Lead assigned successfully.' : 'Lead reassigned successfully.' }
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    console.error(error)
+    throw httpError.assignmentFailed()
+  }
+}
+
+export async function listLeadAssignments(auth: AuthContext, id: string) {
+  await assertCanViewLead(auth, id)
+  const rows = await prisma.leadAssignment.findMany({
+    where: { leadId: id },
+    include: {
+      fromOwner: { select: { id: true, fullName: true } },
+      toOwner: { select: { id: true, fullName: true } },
+      createdBy: { select: { id: true, fullName: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  })
+
+  return {
+    items: rows.map((row) => ({
+      id: row.id,
+      fromOwner: row.fromOwner ? { id: row.fromOwner.id, name: row.fromOwner.fullName } : null,
+      toOwner: row.toOwner ? { id: row.toOwner.id, name: row.toOwner.fullName } : null,
+      reason: row.reason,
+      assignedBy: row.createdBy ? { id: row.createdBy.id, name: row.createdBy.fullName } : null,
+      createdAt: row.createdAt.toISOString(),
+    })),
+  }
 }

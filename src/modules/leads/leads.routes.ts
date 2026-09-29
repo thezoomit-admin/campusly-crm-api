@@ -2,12 +2,19 @@ import { Router } from 'express'
 import { requestIp, requestUserAgent, routeParam } from '../../lib/request'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
+  assignLead,
   checkDuplicate,
   createLead,
   createLeadFollowUp,
   getLead,
+  listLeadAssignees,
+  listLeadAssignments,
+  listLeadPool,
   listLeads,
+  listLeadStatusHistory,
+  listMyLeads,
   updateLead,
+  updateLeadStatus,
   updatePriority,
   updateQualification,
 } from './leads.service'
@@ -67,6 +74,66 @@ leadsRouter.post('/', requirePermission('lead:create'), async (req, res, next) =
   }
 })
 
+leadsRouter.get(
+  '/mine',
+  requirePermission('lead:view', 'You do not have permission to access this page.'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await listMyLeads(req.auth!, {
+          search: queryString(req.query.search),
+          page: queryNumber(req.query.page),
+          limit: queryNumber(req.query.limit),
+          status: queryString(req.query.status),
+          source: queryString(req.query.source),
+          priority: queryString(req.query.priority),
+          country: queryString(req.query.country),
+          followUpStatus: queryString(req.query.followUpStatus),
+          sort: queryString(req.query.sort),
+          order: queryString(req.query.order),
+        }),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.get(
+  '/pool',
+  requirePermission('lead:assign', 'You do not have permission to access the Lead Pool.'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await listLeadPool(req.auth!, {
+          search: queryString(req.query.search),
+          page: queryNumber(req.query.page),
+          limit: queryNumber(req.query.limit),
+          source: queryString(req.query.source),
+          country: queryString(req.query.country),
+          createdFrom: queryString(req.query.createdFrom),
+          createdTo: queryString(req.query.createdTo),
+        }),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.get('/assignees', requirePermission(['lead:assign', 'lead:reassign']), async (req, res, next) => {
+  try {
+    res.json(
+      await listLeadAssignees(req.auth!, {
+        teamId: queryString(req.query.teamId),
+        search: queryString(req.query.search),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
 leadsRouter.get('/:id', requirePermission('lead:view'), async (req, res, next) => {
   try {
     res.json(await getLead(req.auth!, routeParam(req.params.id)))
@@ -74,6 +141,52 @@ leadsRouter.get('/:id', requirePermission('lead:view'), async (req, res, next) =
     next(error)
   }
 })
+
+leadsRouter.get('/:id/status-history', requirePermission('lead:view'), async (req, res, next) => {
+  try {
+    res.json(await listLeadStatusHistory(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.get('/:id/assignments', requirePermission('lead:view'), async (req, res, next) => {
+  try {
+    res.json(await listLeadAssignments(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.patch('/:id/assign', requirePermission(['lead:assign', 'lead:reassign']), async (req, res, next) => {
+  try {
+    res.json(
+      await assignLead(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.patch(
+  '/:id/status',
+  requirePermission('lead:update_status', 'You do not have permission to update the status.'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await updateLeadStatus(req.auth!, routeParam(req.params.id), body(req), {
+          ipAddress: requestIp(req),
+          userAgent: requestUserAgent(req),
+        }),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
 
 leadsRouter.patch('/:id', requirePermission('lead:edit'), async (req, res, next) => {
   try {

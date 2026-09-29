@@ -60,10 +60,17 @@ enum EmployeeDocumentType {
 enum ActivityType {
   CALL
   MESSAGE
-  MEETING
+  WHATSAPP
   EMAIL
+  SMS
+  COUNSELLING
+  MEETING
+  DOCUMENT_REQUEST
+  PAYMENT_DISCUSSION
+  SERVICE_DISCUSSION
   NOTE
   FOLLOW_UP
+  OTHER
 }
 
 model Department {
@@ -142,6 +149,7 @@ model User {
   assignmentTo        LeadAssignment[]       @relation("AssignmentTo")
   assignmentsMade     LeadAssignment[]       @relation("AssignmentActor")
   qualificationHistory LeadQualificationHistory[]
+  statusHistory        LeadStatusHistory[]
   defaultCountryRules CountryAssignmentRule[] @relation("CountryRuleDefaultOwner")
   counselledApplications Application[]       @relation("ApplicationCounsellor")
   counselledStudents  Student[]              @relation("StudentCounsellor")
@@ -510,6 +518,7 @@ model Lead {
   ownerId               String? @map("owner_id") @db.Uuid
   status                String  @default("New")
   statusCode            String? @map("status_code")
+  lostReasonCode        String? @map("lost_reason_code")
 
   academicFitCode            String? @map("academic_fit_code")
   englishReadinessCode       String? @map("english_readiness_code")
@@ -537,6 +546,7 @@ model Lead {
   updatedBy           User?  @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   assignments         LeadAssignment[]
   qualificationHistory LeadQualificationHistory[]
+  statusHistory       LeadStatusHistory[]
   followUps           FollowUp[]
 
   @@index([status])
@@ -595,6 +605,26 @@ model LeadQualificationHistory {
 
   @@index([leadId])
   @@map("lead_qualification_history")
+}
+
+model LeadStatusHistory {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId             String   @map("lead_id") @db.Uuid
+  previousStatus     String?  @map("previous_status")
+  previousStatusCode String?  @map("previous_status_code")
+  newStatus          String   @map("new_status")
+  newStatusCode      String   @map("new_status_code")
+  remarks            String?  @db.Text
+  lostReasonCode     String?  @map("lost_reason_code")
+  overrideReason     String?  @map("override_reason")
+  isOverride         Boolean  @default(false) @map("is_override")
+  createdById        String?  @map("created_by_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at")
+  lead               Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdBy          User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([leadId, createdAt])
+  @@map("lead_status_history")
 }
 
 model Application {
@@ -671,20 +701,35 @@ model Payment {
 }
 
 model FollowUp {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  contactName String   @map("contact_name")
-  leadId      String?  @map("lead_id") @db.Uuid
-  type        String
-  ownerName   String?  @map("owner_name")
-  ownerId     String?  @map("owner_id") @db.Uuid
-  dueAt       DateTime? @map("due_at")
-  priority    String?
-  status      String
-  notes       String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
-  owner       User?    @relation("FollowUpOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  lead        Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contactName      String    @map("contact_name")
+  leadId           String?   @map("lead_id") @db.Uuid
+  type             String
+  ownerName        String?   @map("owner_name")
+  ownerId          String?   @map("owner_id") @db.Uuid
+  dueAt            DateTime? @map("due_at")
+  priority         String?
+  status           String
+  purpose          String?
+  purposeOther     String?   @map("purpose_other")
+  notes            String?   @db.Text
+  nextAction       String?   @map("next_action") @db.Text
+  reminder         String?
+  outcome          String?
+  completedAt      DateTime? @map("completed_at")
+  completedById    String?   @map("completed_by_id") @db.Uuid
+  completedByName  String?   @map("completed_by_name")
+  cancelledAt      DateTime? @map("cancelled_at")
+  cancelledById    String?   @map("cancelled_by_id") @db.Uuid
+  cancelledByName  String?   @map("cancelled_by_name")
+  cancelReason     String?   @map("cancel_reason") @db.Text
+  source           String?   @default("Manual")
+  sourceReason     String?   @map("source_reason")
+  scheduleHistory  Json?     @map("schedule_history")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
+  owner            User?     @relation("FollowUpOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  lead             Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([ownerId])

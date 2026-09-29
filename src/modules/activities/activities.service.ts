@@ -4,14 +4,20 @@ import type { Prisma } from '../../lib/prisma-client'
 import { prisma } from '../../lib/prisma'
 
 import type { AuthContext } from '../auth/session.service'
+import {
+  ACTIVITY_TYPE_LABELS,
+  ACTIVITY_TYPES,
+  type ActivityTypeValue,
+} from './activities.constants'
 
-export const ACTIVITY_TYPES = ['CALL', 'MESSAGE', 'MEETING', 'EMAIL', 'NOTE', 'FOLLOW_UP'] as const
-export type ActivityTypeValue = (typeof ACTIVITY_TYPES)[number]
+export { ACTIVITY_TYPES }
+export type { ActivityTypeValue }
 export const FEED_CATEGORIES = [
   'call',
   'message',
   'meeting',
   'email',
+  'counselling',
   'document',
   'status',
   'assignment',
@@ -39,6 +45,7 @@ export type ActivityFeedItem = {
   relatedId: string | null
   outcome: string | null
   durationMin: number | null
+  nextAction: string | null
   status: string
   ipAddress: string | null
   userAgent: string | null
@@ -95,19 +102,17 @@ function humanize(value: string | null | undefined) {
 
 function typeToCategory(type: ActivityTypeValue): FeedCategory {
   if (type === 'CALL') return 'call'
-  if (type === 'MESSAGE') return 'message'
+  if (type === 'MESSAGE' || type === 'WHATSAPP' || type === 'SMS') return 'message'
   if (type === 'MEETING') return 'meeting'
   if (type === 'EMAIL') return 'email'
+  if (type === 'COUNSELLING') return 'counselling'
+  if (type === 'DOCUMENT_REQUEST') return 'document'
+  if (type === 'PAYMENT_DISCUSSION') return 'payment'
   return 'system'
 }
 
 function actionLabel(type: ActivityTypeValue) {
-  if (type === 'CALL') return 'Call'
-  if (type === 'MESSAGE') return 'Message'
-  if (type === 'MEETING') return 'Meeting'
-  if (type === 'EMAIL') return 'Email'
-  if (type === 'FOLLOW_UP') return 'Follow-up'
-  return 'Note'
+  return ACTIVITY_TYPE_LABELS[type] || humanize(type)
 }
 
 function activityDetails(row: {
@@ -116,16 +121,21 @@ function activityDetails(row: {
   durationMin: number | null
   outcome: string | null
   notes: string | null
+  nextAction?: string | null
 }) {
   const name = row.relatedName || 'contact'
+  const label = actionLabel(row.type)
   if (row.type === 'CALL') {
     const bits = [`Called ${name}`]
     if (row.durationMin) bits.push(`${row.durationMin} min`)
     if (row.outcome) bits.push(row.outcome)
     return bits.join(' · ')
   }
-  if (row.type === 'MESSAGE') {
-    return row.notes ? `Message to ${name}: ${row.notes}` : `Message sent to ${name}`
+  if (row.type === 'WHATSAPP' || row.type === 'MESSAGE') {
+    return row.notes ? `WhatsApp with ${name}: ${row.notes}` : `WhatsApp with ${name}`
+  }
+  if (row.type === 'SMS') {
+    return row.notes ? `SMS to ${name}: ${row.notes}` : `SMS to ${name}`
   }
   if (row.type === 'MEETING') {
     return row.notes ? `Meeting with ${name}: ${row.notes}` : `Meeting with ${name}`
@@ -133,10 +143,28 @@ function activityDetails(row: {
   if (row.type === 'EMAIL') {
     return row.notes ? `Email to ${name}: ${row.notes}` : `Email sent to ${name}`
   }
+  if (row.type === 'COUNSELLING') {
+    const bits = [`Counselling with ${name}`]
+    if (row.outcome) bits.push(row.outcome)
+    if (row.notes) bits.push(row.notes)
+    return bits.join(' · ')
+  }
+  if (row.type === 'DOCUMENT_REQUEST') {
+    return row.notes ? `Document request for ${name}: ${row.notes}` : `Document request for ${name}`
+  }
+  if (row.type === 'PAYMENT_DISCUSSION') {
+    return row.notes ? `Payment discussion with ${name}: ${row.notes}` : `Payment discussion with ${name}`
+  }
+  if (row.type === 'SERVICE_DISCUSSION') {
+    return row.notes ? `Service discussion with ${name}: ${row.notes}` : `Service discussion with ${name}`
+  }
   if (row.type === 'FOLLOW_UP') {
     return row.notes ? `Follow-up with ${name}: ${row.notes}` : `Follow-up with ${name}`
   }
-  return row.notes || `Note on ${name}`
+  if (row.nextAction) {
+    return row.notes ? `${label} · ${name}: ${row.notes}` : `${label} · ${name} · Next: ${row.nextAction}`
+  }
+  return row.notes || `${label} on ${name}`
 }
 
 function classifyAudit(action: string, entityType: string | null): FeedCategory {
@@ -175,7 +203,9 @@ function auditModule(category: FeedCategory, entityType: string | null) {
 
 function auditDetails(action: string, entityType: string | null, entityId: string | null, metadata: Record<string, unknown> | null) {
   const related = stringify(metadata?.relatedName || metadata?.name || metadata?.fullName)
-  const code = entityId ? `${(entityType || 'REC').replace(/[^a-z]/gi, '').slice(0, 3).toUpperCase() || 'REC'}-${entityId.replace(/-/g, '').slice(-4).toUpperCase()}` : ''
+  const code = entityId
+    ? `${(entityType || 'REC').replace(/[^a-z]/gi, '').slice(0, 3).toUpperCase() || 'REC'}-${entityId.replace(/-/g, '').slice(-4).toUpperCase()}`
+    : ''
   const from = stringify(metadata?.from ?? metadata?.previous ?? metadata?.before)
   const to = stringify(metadata?.to ?? metadata?.next ?? metadata?.after)
   if (from && to) {
@@ -191,7 +221,7 @@ function auditDetails(action: string, entityType: string | null, entityId: strin
 }
 
 function skipAuditAction(action: string) {
-  return action.startsWith('ACTIVITY_')
+  return action.startsWith('ACTIVITY_') || action === 'LEAD_STATUS_CHANGED'
 }
 
 function inRange(date: Date, from?: Date, to?: Date) {
@@ -222,6 +252,23 @@ function dailySeries(items: ActivityFeedItem[], from: Date, to: Date, category?:
 
 function countCategory(items: ActivityFeedItem[], category: FeedCategory) {
   return items.filter((item) => item.category === category).length
+}
+
+function parseOptionalBool(value: unknown) {
+  return value === true || value === 'true' || value === 'Yes' || value === 'yes'
+}
+
+function followUpTypeFromActivity(type: ActivityTypeValue) {
+  if (type === 'CALL') return 'Call'
+  if (type === 'WHATSAPP' || type === 'MESSAGE') return 'WhatsApp'
+  if (type === 'EMAIL') return 'Email'
+  if (type === 'SMS') return 'SMS'
+  if (type === 'COUNSELLING') return 'Counselling'
+  if (type === 'MEETING') return 'Meeting'
+  if (type === 'DOCUMENT_REQUEST') return 'Document Request'
+  if (type === 'PAYMENT_DISCUSSION') return 'Payment Discussion'
+  if (type === 'SERVICE_DISCUSSION') return 'Service Discussion'
+  return 'Call'
 }
 
 const activityUserSelect = {
@@ -308,7 +355,7 @@ export async function listActivityFeed(
 
   const mappedActivities: ActivityFeedItem[] = activities.map((row) => ({
     id: `activity:${row.id}`,
-    source: 'activity',
+    source: 'activity' as const,
     category: typeToCategory(row.type),
     action: actionLabel(row.type),
     actionKey: row.type,
@@ -319,6 +366,7 @@ export async function listActivityFeed(
     relatedId: row.relatedId,
     outcome: row.outcome,
     durationMin: row.durationMin,
+    nextAction: row.nextAction,
     status: 'Completed',
     ipAddress: row.ipAddress,
     userAgent: row.userAgent,
@@ -345,6 +393,7 @@ export async function listActivityFeed(
         relatedId: row.entityId,
         outcome: null,
         durationMin: null,
+        nextAction: null,
         status: 'Completed',
         ipAddress: row.ipAddress,
         userAgent: row.userAgent,
@@ -388,6 +437,7 @@ export async function listActivityFeed(
       message: countCategory(searched, 'message'),
       meeting: countCategory(searched, 'meeting'),
       email: countCategory(searched, 'email'),
+      counselling: countCategory(searched, 'counselling'),
       document: countCategory(searched, 'document'),
       status: countCategory(searched, 'status'),
       assignment: countCategory(searched, 'assignment'),
@@ -400,6 +450,7 @@ export async function listActivityFeed(
       message: summaryFor('message'),
       meeting: summaryFor('meeting'),
       email: summaryFor('email'),
+      counselling: summaryFor('counselling'),
       document: summaryFor('document'),
     },
   }
@@ -418,30 +469,58 @@ export async function createActivity(
     nextAction?: string
     nextDate?: string | null
     occurredAt?: string
+    createNextFollowUp?: boolean | string
+    nextFollowUpType?: string
+    nextFollowUpPriority?: string
   },
   meta: { ipAddress?: string; userAgent?: string },
 ) {
   if (!ACTIVITY_TYPES.includes(input.type as ActivityTypeValue)) {
     throw httpError.validation({ type: 'Select a valid activity type.' })
   }
+  const type = input.type as ActivityTypeValue
   const durationMin = input.durationMin === undefined || input.durationMin === null ? null : Number(input.durationMin)
   if (durationMin !== null && (Number.isNaN(durationMin) || durationMin < 0 || durationMin > 24 * 60)) {
     throw httpError.validation({ durationMin: 'Enter a valid duration in minutes.' })
   }
 
+  const outcome = input.outcome?.trim() || null
+  if (type === 'CALL' && outcome === 'Other' && !input.notes?.trim()) {
+    throw httpError.validation({ notes: 'Please provide a reason.' }, 'Please provide a reason.')
+  }
+
+  const nextAction = input.nextAction?.trim() || null
+  const nextDate = input.nextDate ? new Date(input.nextDate) : null
+  if (input.nextDate && (!nextDate || Number.isNaN(nextDate.getTime()))) {
+    throw httpError.validation({ nextDate: 'Please select a valid date.' }, 'Please select a valid date.')
+  }
+
+  const createNext = parseOptionalBool(input.createNextFollowUp)
+  if (createNext) {
+    if (!nextDate) {
+      throw httpError.validation({ nextDate: 'Follow-up date is required.' }, 'Follow-up date is required.')
+    }
+    if (!nextAction) {
+      throw httpError.validation({ nextAction: 'Please enter the next action.' }, 'Please enter the next action.')
+    }
+    if (input.relatedType !== 'lead' || !input.relatedId?.trim()) {
+      throw httpError.validation({ relatedId: 'Lead is required to schedule the next follow-up.' })
+    }
+  }
+
   const row = await prisma.activity.create({
     data: {
-      type: input.type as ActivityTypeValue,
+      type,
       userId: auth.user.id,
       occurredAt: input.occurredAt ? new Date(input.occurredAt) : new Date(),
       durationMin,
-      outcome: input.outcome?.trim() || null,
+      outcome,
       notes: input.notes?.trim() || null,
       relatedName: input.relatedName?.trim() || null,
       relatedType: input.relatedType?.trim() || null,
       relatedId: input.relatedId?.trim() || null,
-      nextAction: input.nextAction?.trim() || null,
-      nextDate: input.nextDate ? new Date(input.nextDate) : null,
+      nextAction,
+      nextDate,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
     },
@@ -450,6 +529,41 @@ export async function createActivity(
     },
   })
 
+  let nextFollowUp: { id: string } | null = null
+  if (createNext && nextDate && input.relatedId) {
+    const lead = await prisma.lead.findUnique({ where: { id: input.relatedId } })
+    if (lead) {
+      const followUp = await prisma.followUp.create({
+        data: {
+          leadId: lead.id,
+          contactName: lead.name,
+          type: input.nextFollowUpType?.trim() || followUpTypeFromActivity(type),
+          dueAt: nextDate,
+          priority: input.nextFollowUpPriority?.trim() || lead.priority || 'Medium',
+          status: nextDate.getTime() < Date.now() ? 'Overdue' : 'Pending',
+          purpose: type === 'COUNSELLING' ? 'Counselling' : 'Information Sharing',
+          notes: input.notes?.trim() || null,
+          nextAction,
+          reminder: '30 Minutes Before',
+          ownerId: lead.ownerId || auth.user.id,
+          ownerName: lead.ownerName || auth.user.fullName,
+          source: 'Manual',
+          sourceReason: `Created from ${ACTIVITY_TYPE_LABELS[type]} activity`,
+        },
+      })
+      nextFollowUp = { id: followUp.id }
+      await writeAuditLog({
+        userId: auth.user.id,
+        action: 'FOLLOW_UP_CREATED',
+        entityType: 'lead',
+        entityId: lead.id,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+        metadata: { followUpId: followUp.id, fromActivityId: row.id, type: followUp.type },
+      })
+    }
+  }
+
   await writeAuditLog({
     userId: auth.user.id,
     action: 'ACTIVITY_CREATED',
@@ -457,13 +571,16 @@ export async function createActivity(
     entityId: row.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
-    metadata: { type: row.type, relatedName: row.relatedName },
+    metadata: { type: row.type, relatedName: row.relatedName, nextFollowUpId: nextFollowUp?.id },
   })
 
-  return row
+  return { activity: row, nextFollowUp }
 }
 
-export async function recordActivityExport(auth: AuthContext, meta: { ipAddress?: string; userAgent?: string; count: number }) {
+export async function recordActivityExport(
+  auth: AuthContext,
+  meta: { ipAddress?: string; userAgent?: string; count: number },
+) {
   await writeAuditLog({
     userId: auth.user.id,
     action: 'ACTIVITY_EXPORTED',

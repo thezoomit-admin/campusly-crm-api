@@ -13,7 +13,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction) {
   next()
 }
 
-export function requirePermission(required: string | string[]) {
+export function requirePermission(required: string | string[], message?: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.auth?.user) {
       res.status(401).json({
@@ -25,7 +25,7 @@ export function requirePermission(required: string | string[]) {
 
     if (!hasPermission(req.auth.permissions, required)) {
       res.status(403).json({
-        error: 'You do not have permission to perform this action.',
+        error: message || 'You do not have permission to perform this action.',
         code: 'ACCESS_DENIED',
       })
       return

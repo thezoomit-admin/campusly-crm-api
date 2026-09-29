@@ -7,7 +7,15 @@ import type { AuthContext } from '../auth/session.service'
 import { getMasterDataCategory, MASTER_DATA_CATEGORIES, type MasterDataCategory } from './master-data.catalog'
 
 const ENTITY = 'master_data'
-const BEHAVIOR_KEYS = new Set(['converted', 'lost', 'closed'])
+const BEHAVIOR_KEYS = new Set([
+  'converted',
+  'lost',
+  'closed',
+  'file_opening_pending',
+  'file_opened',
+  'duplicate',
+  'invalid',
+])
 const SORT_FIELDS = new Set(['name', 'code', 'sortOrder', 'createdAt', 'status'])
 
 type AuditMeta = { ipAddress?: string; userAgent?: string }

@@ -14,8 +14,23 @@ export class HttpError extends Error {
 }
 
 export const httpError = {
-  accessDenied() {
-    return new HttpError(403, 'You do not have permission to perform this action.', 'ACCESS_DENIED')
+  accessDenied(message = 'You do not have permission to perform this action.') {
+    return new HttpError(403, message, 'ACCESS_DENIED')
+  },
+  statusUpdateFailed() {
+    return new HttpError(500, 'Unable to update the lead status. Please try again.', 'STATUS_UPDATE_FAILED')
+  },
+  leadPoolLoadFailed() {
+    return new HttpError(500, 'Unable to load Lead Pool. Please try again.', 'LEAD_POOL_LOAD_FAILED')
+  },
+  myLeadsLoadFailed() {
+    return new HttpError(500, 'Unable to load your leads. Please try again.', 'MY_LEADS_LOAD_FAILED')
+  },
+  myLeadsSearchFailed() {
+    return new HttpError(500, 'Unable to complete the search. Please try again.', 'MY_LEADS_SEARCH_FAILED')
+  },
+  assignmentFailed() {
+    return new HttpError(500, 'Unable to assign the selected lead. Please try again.', 'LEAD_ASSIGNMENT_FAILED')
   },
   unauthenticated() {
     return new HttpError(401, 'Authentication required', 'UNAUTHENTICATED')
