@@ -31,23 +31,34 @@ activitiesRouter.get('/', requirePermission('activity:view'), async (req, res, n
 activitiesRouter.post('/', requirePermission('activity:create'), async (req, res, next) => {
   try {
     const body = (req.body ?? {}) as Record<string, unknown>
-    const activity = await createActivity(
+    const result = await createActivity(
       req.auth!,
       {
         type: String(body.type || ''),
         relatedName: typeof body.relatedName === 'string' ? body.relatedName : undefined,
         relatedType: typeof body.relatedType === 'string' ? body.relatedType : undefined,
         relatedId: typeof body.relatedId === 'string' ? body.relatedId : undefined,
-        durationMin: typeof body.durationMin === 'number' ? body.durationMin : body.durationMin == null ? null : Number(body.durationMin),
+        durationMin:
+          typeof body.durationMin === 'number'
+            ? body.durationMin
+            : body.durationMin == null
+              ? null
+              : Number(body.durationMin),
         outcome: typeof body.outcome === 'string' ? body.outcome : undefined,
         notes: typeof body.notes === 'string' ? body.notes : undefined,
         nextAction: typeof body.nextAction === 'string' ? body.nextAction : undefined,
         nextDate: typeof body.nextDate === 'string' ? body.nextDate : null,
         occurredAt: typeof body.occurredAt === 'string' ? body.occurredAt : undefined,
+        createNextFollowUp:
+          typeof body.createNextFollowUp === 'boolean' || typeof body.createNextFollowUp === 'string'
+            ? body.createNextFollowUp
+            : undefined,
+        nextFollowUpType: typeof body.nextFollowUpType === 'string' ? body.nextFollowUpType : undefined,
+        nextFollowUpPriority: typeof body.nextFollowUpPriority === 'string' ? body.nextFollowUpPriority : undefined,
       },
       { ipAddress: requestIp(req), userAgent: requestUserAgent(req) },
     )
-    res.status(201).json({ activity })
+    res.status(201).json(result)
   } catch (error) {
     next(error)
   }

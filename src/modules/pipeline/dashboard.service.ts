@@ -1,4 +1,5 @@
 import { prisma } from '../../lib/prisma'
+import { syncOverdueFollowUps } from '../../jobs/overdue-follow-ups'
 
 const SOURCE_COLORS = ['#38bdf8', '#34d399', '#818cf8', '#fb7185', '#f43f5e', '#fbbf24', '#22d3ee', '#a78bfa']
 const CLOSED_APPLICATION_STATUSES = ['Draft', 'Lost', 'Rejected', 'Cancelled', 'Withdrawn']
@@ -93,6 +94,7 @@ function utcDayKey(date: Date) {
 }
 
 export async function getDashboardOverview(year: number, month: number) {
+  await syncOverdueFollowUps()
   const now = new Date()
   const last30 = addUtcDays(startOfUtcDay(now), -30)
   const prev30 = addUtcDays(last30, -30)
@@ -111,6 +113,9 @@ export async function getDashboardOverview(year: number, month: number) {
     studentsLast30,
     studentsPrev30,
     pendingFollowUps,
+    overdueFollowUps,
+    dueTodayFollowUps,
+    completedTodayFollowUps,
     followUpsLast30,
     followUpsPrev30,
     paidPayments,
@@ -139,6 +144,26 @@ export async function getDashboardOverview(year: number, month: number) {
     prisma.student.count({ where: { createdAt: { gte: last30 } } }),
     prisma.student.count({ where: { createdAt: { gte: prev30, lt: last30 } } }),
     prisma.followUp.count({ where: { status: { in: OPEN_FOLLOW_UP_STATUSES } } }),
+    prisma.followUp.count({
+      where: {
+        OR: [
+          { status: 'Overdue' },
+          { AND: [{ status: { in: ['Pending', 'Due Soon'] } }, { dueAt: { lt: startOfUtcDay(now) } }] },
+        ],
+      },
+    }),
+    prisma.followUp.count({
+      where: {
+        status: { in: OPEN_FOLLOW_UP_STATUSES },
+        dueAt: { gte: startOfUtcDay(now), lt: addUtcDays(startOfUtcDay(now), 1) },
+      },
+    }),
+    prisma.followUp.count({
+      where: {
+        status: { in: ['Completed', 'Done'] },
+        completedAt: { gte: startOfUtcDay(now), lt: addUtcDays(startOfUtcDay(now), 1) },
+      },
+    }),
     prisma.followUp.count({ where: { createdAt: { gte: last30 }, status: { in: OPEN_FOLLOW_UP_STATUSES } } }),
     prisma.followUp.count({
       where: { createdAt: { gte: prev30, lt: last30 }, status: { in: OPEN_FOLLOW_UP_STATUSES } },
@@ -287,6 +312,12 @@ export async function getDashboardOverview(year: number, month: number) {
         icon: 'phone' as const,
       },
     ],
+    followUpMetrics: {
+      overdue: overdueFollowUps,
+      dueToday: dueTodayFollowUps,
+      completedToday: completedTodayFollowUps,
+      pending: pendingFollowUps,
+    },
     leadSources,
     leadTrend,
     recentLeads: recentLeadRows.map((row) => ({

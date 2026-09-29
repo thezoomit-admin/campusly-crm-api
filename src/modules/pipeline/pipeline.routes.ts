@@ -195,26 +195,14 @@ pipelineRouter.get('/payments', requirePermission('payment:view'), async (req, r
 
 pipelineRouter.get('/follow-ups', requirePermission('follow_up:view'), async (req, res, next) => {
   try {
-    const search = queryString(req.query.search)?.toLowerCase()
-    const rows = await prisma.followUp.findMany({ orderBy: { dueAt: 'asc' } })
-    const items = rows
-      .map((row) => ({
-        id: row.id,
-        contact: row.contactName,
-        type: row.type,
-        owner: row.ownerName || '—',
-        due: formatDue(row.dueAt),
-        priority: row.priority || '—',
-        status: row.status,
-      }))
-      .filter((row) => {
-        if (!search) return true
-        return [row.contact, row.type, row.owner, row.priority, row.status]
-          .join(' ')
-          .toLowerCase()
-          .includes(search)
-      })
-    res.json({ items, total: items.length })
+    const { listFollowUps } = await import('../follow-ups/follow-ups.service')
+    res.json(
+      await listFollowUps(req.auth!, {
+        search: queryString(req.query.search),
+        leadId: queryString(req.query.leadId),
+        status: queryString(req.query.status),
+      }),
+    )
   } catch (error) {
     next(error)
   }

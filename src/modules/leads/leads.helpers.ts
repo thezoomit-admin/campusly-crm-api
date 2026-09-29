@@ -223,14 +223,91 @@ export function leadScopeWhere(auth: AuthContext): Prisma.LeadWhereInput {
   return { ownerId: auth.user.id }
 }
 
+export const FOLLOW_UP_CLOSED_STATUSES = ['Done', 'Completed', 'Cancelled', 'Rescheduled'] as const
+export const FOLLOW_UP_OPEN_STATUSES = ['Pending', 'Due Soon', 'Overdue'] as const
+
+export function myLeadsOwnerWhere(auth: AuthContext): Prisma.LeadWhereInput {
+  return { ownerId: auth.user.id }
+}
+
+export function priorityRank(priority?: string | null) {
+  const key = (priority || '').trim().toLowerCase()
+  if (key === 'high' || key === 'urgent') return 3
+  if (key === 'medium') return 2
+  if (key === 'low') return 1
+  return 0
+}
+
+export function leadPoolScopeWhere(auth: AuthContext): Prisma.LeadWhereInput {
+  const scope = auth.dataScopes.lead ?? 'OWN'
+  if (scope === 'ALL') return { ownerId: null }
+  if (scope === 'DEPARTMENT' && auth.user.departmentId) {
+    return { ownerId: null, assignedCountryTeam: { departmentId: auth.user.departmentId } }
+  }
+  if (scope === 'TEAM' && auth.user.teamId) {
+    return { ownerId: null, assignedCountryTeamId: auth.user.teamId }
+  }
+  return { id: { in: [] } }
+}
+
+export function leadReadableWhere(auth: AuthContext): Prisma.LeadWhereInput {
+  const scope = leadScopeWhere(auth)
+  // ALL already covers owned + pool. Putting `{}` inside OR makes Prisma match
+  // nothing for that branch, so assigned leads would 404 on detail/view.
+  if (Object.keys(scope).length === 0) return {}
+  if (!hasPermission(auth.permissions, ['lead:assign', 'lead:reassign'])) {
+    return scope
+  }
+  return { OR: [scope, leadPoolScopeWhere(auth)] }
+}
+
+export function formatWaitingTime(createdAt: Date, now = new Date()) {
+  const diffMs = Math.max(0, now.getTime() - createdAt.getTime())
+  const minutes = Math.floor(diffMs / 60000)
+  if (minutes <= 1) return '1 Minute'
+  if (minutes < 60) return `${minutes} Minutes`
+  const hours = Math.floor(minutes / 60)
+  if (hours === 1) return '1 Hour'
+  if (hours < 24) return `${hours} Hours`
+  const days = Math.floor(hours / 24)
+  return days === 1 ? '1 Day' : `${days} Days`
+}
+
+export function assigneeVisibilityWhere(auth: AuthContext): Prisma.UserWhereInput {
+  const scope = auth.dataScopes.lead ?? 'OWN'
+  if (scope === 'ALL') return {}
+  if (scope === 'DEPARTMENT' && auth.user.departmentId) {
+    return { departmentId: auth.user.departmentId }
+  }
+  if (scope === 'TEAM' && auth.user.teamId) {
+    return { teamId: auth.user.teamId }
+  }
+  return { id: auth.user.id }
+}
+
 export async function assertCanViewLead(auth: AuthContext, leadId: string) {
   const lead = await prisma.lead.findFirst({
-    where: { id: leadId, AND: [leadScopeWhere(auth)] },
+    where: { id: leadId, AND: [leadReadableWhere(auth)] },
   })
   if (!lead) {
     throw httpError.notFound('Lead not found.')
   }
   return lead
+}
+
+export async function assertCanManageLeadAssignment(auth: AuthContext, leadId: string) {
+  const canAssign = hasPermission(auth.permissions, 'lead:assign')
+  const canReassign = hasPermission(auth.permissions, 'lead:reassign')
+  if (!canAssign && !canReassign) {
+    throw httpError.accessDenied()
+  }
+  const lead = await prisma.lead.findFirst({
+    where: { id: leadId, AND: [leadReadableWhere(auth)] },
+  })
+  if (!lead) {
+    throw httpError.notFound('Lead not found.')
+  }
+  return { lead, canAssign, canReassign }
 }
 
 export function profileCompletion(lead: {
