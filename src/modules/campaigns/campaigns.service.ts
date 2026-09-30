@@ -4,7 +4,8 @@ import { httpError } from '../../lib/http-error'
 import { prisma } from '../../lib/prisma'
 import { hasPermission } from '../auth/access'
 import type { AuthContext } from '../auth/session.service'
-import { asOptionalString, asString, throwIfInvalid } from '../leads/leads.helpers'
+import { ATTRIBUTION_MESSAGES, ensureLeadAttribution } from '../leads/lead-attribution'
+import { asOptionalString, asString, leadScopeWhere, throwIfInvalid } from '../leads/leads.helpers'
 
 type AuditMeta = { ipAddress?: string; userAgent?: string }
 
@@ -65,6 +66,56 @@ async function nextCampaignCode() {
 }
 
 const STATUSES = new Set(['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETED', 'ARCHIVED'])
+const CONVERTED = new Set(['CONVERTED', 'FILE_OPENING_PENDING', 'FILE_OPENED'])
+
+async function activeMaster(categoryKey: string, code: string) {
+  if (!code) return null
+  const item = await prisma.masterDataItem.findUnique({
+    where: { categoryKey_code: { categoryKey, code } },
+  })
+  if (!item || item.status !== 'ACTIVE') return null
+  return item
+}
+
+async function assertCampaignIdentity(
+  input: {
+    name: string
+    sourceCode: string
+    channel: string
+    excludeId?: string
+    requireSource?: boolean
+    validateChannel?: boolean
+  },
+  fields: Record<string, string>,
+) {
+  if (input.name.length < 2 || input.name.length > 150) {
+    fields.name = input.name ? 'Campaign name must be between 2 and 150 characters.' : 'Campaign name is required.'
+  }
+  const requireSource = input.requireSource !== false
+  const source = input.sourceCode ? await activeMaster('LEAD_SOURCE', input.sourceCode) : null
+  if (requireSource && !input.sourceCode) fields.sourceCode = ATTRIBUTION_MESSAGES.sourceRequired
+  else if (input.sourceCode && !source) fields.sourceCode = ATTRIBUTION_MESSAGES.sourceInvalid
+
+  const validateChannel = input.validateChannel !== false
+  if (validateChannel && requireSource && !input.channel) fields.channel = 'Channel is required.'
+  else if (validateChannel && input.channel && source) {
+    const channel = await activeMaster('LEAD_CHANNEL', input.channel)
+    if (!channel || channel.parentId !== source.id) fields.channel = ATTRIBUTION_MESSAGES.channelInvalid
+  } else if (validateChannel && input.channel && !source) {
+    fields.channel = ATTRIBUTION_MESSAGES.channelInvalid
+  }
+
+  if (!fields.name && input.sourceCode) {
+    const duplicate = await prisma.campaign.findFirst({
+      where: {
+        sourceCode: input.sourceCode,
+        name: { equals: input.name, mode: 'insensitive' },
+        ...(input.excludeId ? { id: { not: input.excludeId } } : {}),
+      },
+    })
+    if (duplicate) fields.name = ATTRIBUTION_MESSAGES.duplicateCampaign
+  }
+}
 
 export async function listCampaigns(
   auth: AuthContext,
@@ -131,18 +182,24 @@ export async function createCampaign(auth: AuthContext, body: Record<string, unk
     throw httpError.accessDenied()
   }
 
+  await ensureLeadAttribution()
   const fields: Record<string, string> = {}
   const name = asString(body.name)
-  if (name.length < 2) fields.name = 'Campaign name is required.'
+  const sourceCode = asOptionalString(body.sourceCode, 40)?.toUpperCase() || ''
+  const channel = asOptionalString(body.channel, 40)?.toUpperCase() || ''
+  await assertCampaignIdentity({ name, sourceCode, channel }, fields)
 
-  const statusRaw = asString(body.status).toUpperCase() || 'DRAFT'
+  const statusRaw = asString(body.status).toUpperCase() || 'ACTIVE'
   if (!STATUSES.has(statusRaw)) fields.status = 'Please select a valid status.'
 
   const startDate = parseDate(body.startDate, 'startDate', fields)
+  if (!asString(body.startDate)) fields.startDate = 'Start date is required.'
   const endDate = parseDate(body.endDate, 'endDate', fields)
   if (startDate && endDate && endDate < startDate) {
-    fields.endDate = 'End date must be after start date.'
+    fields.endDate = ATTRIBUTION_MESSAGES.endBeforeStart
   }
+  const description = asOptionalString(body.description, 1000)
+  if (asString(body.description).length > 1000) fields.description = 'Description must be 1000 characters or less.'
 
   const budget = parseBudget(body.budget, fields)
   throwIfInvalid(fields)
@@ -155,9 +212,9 @@ export async function createCampaign(auth: AuthContext, body: Record<string, unk
     data: {
       code,
       name,
-      description: asOptionalString(body.description, 2000),
-      sourceCode: asOptionalString(body.sourceCode, 40)?.toUpperCase() || null,
-      channel: asOptionalString(body.channel, 40),
+      description,
+      sourceCode: sourceCode || null,
+      channel: channel || null,
       status: statusRaw as CampaignStatus,
       startDate,
       endDate,
@@ -197,9 +254,26 @@ export async function updateCampaign(
   const current = await prisma.campaign.findUnique({ where: { id } })
   if (!current) throw httpError.notFound('Campaign not found.')
 
+  await ensureLeadAttribution()
   const fields: Record<string, string> = {}
   const name = body.name !== undefined ? asString(body.name) : current.name
-  if (name.length < 2) fields.name = 'Campaign name is required.'
+  const sourceCode =
+    body.sourceCode !== undefined
+      ? asOptionalString(body.sourceCode, 40)?.toUpperCase() || ''
+      : current.sourceCode || ''
+  const channel =
+    body.channel !== undefined ? asOptionalString(body.channel, 40)?.toUpperCase() || '' : current.channel || ''
+  await assertCampaignIdentity(
+    {
+      name,
+      sourceCode,
+      channel,
+      excludeId: id,
+      requireSource: Boolean(current.sourceCode || body.sourceCode !== undefined),
+      validateChannel: body.channel !== undefined || body.sourceCode !== undefined,
+    },
+    fields,
+  )
 
   const statusRaw =
     body.status !== undefined ? asString(body.status).toUpperCase() : current.status
@@ -207,10 +281,16 @@ export async function updateCampaign(
 
   const startDate =
     body.startDate !== undefined ? parseDate(body.startDate, 'startDate', fields) : current.startDate
+  if (!startDate) fields.startDate = 'Start date is required.'
   const endDate =
     body.endDate !== undefined ? parseDate(body.endDate, 'endDate', fields) : current.endDate
   if (startDate && endDate && endDate < startDate) {
-    fields.endDate = 'End date must be after start date.'
+    fields.endDate = ATTRIBUTION_MESSAGES.endBeforeStart
+  }
+  const description =
+    body.description !== undefined ? asOptionalString(body.description, 1000) : current.description
+  if (body.description !== undefined && asString(body.description).length > 1000) {
+    fields.description = 'Description must be 1000 characters or less.'
   }
 
   const budget = body.budget !== undefined ? parseBudget(body.budget, fields) : current.budget
@@ -220,13 +300,9 @@ export async function updateCampaign(
     where: { id },
     data: {
       name,
-      description:
-        body.description !== undefined ? asOptionalString(body.description, 2000) : current.description,
-      sourceCode:
-        body.sourceCode !== undefined
-          ? asOptionalString(body.sourceCode, 40)?.toUpperCase() || null
-          : current.sourceCode,
-      channel: body.channel !== undefined ? asOptionalString(body.channel, 40) : current.channel,
+      description,
+      sourceCode: sourceCode || null,
+      channel: channel || null,
       status: statusRaw as CampaignStatus,
       startDate,
       endDate,
@@ -253,25 +329,86 @@ export async function updateCampaign(
   return { campaign: serializeCampaign(campaign), message: 'Campaign updated successfully.' }
 }
 
-export async function campaignOptions(auth: AuthContext) {
+export async function campaignOptions(auth: AuthContext, query: { sourceCode?: string } = {}) {
   if (
     !hasPermission(auth.permissions, 'campaign:view') &&
     !hasPermission(auth.permissions, 'lead:create') &&
-    !hasPermission(auth.permissions, 'lead:edit')
+    !hasPermission(auth.permissions, 'lead:edit') &&
+    !hasPermission(auth.permissions, 'lead:change_source')
   ) {
     throw httpError.accessDenied()
   }
+  const sourceCode = query.sourceCode?.trim().toUpperCase()
   const rows = await prisma.campaign.findMany({
-    where: { status: { in: ['ACTIVE', 'PAUSED'] } },
+    where: {
+      status: 'ACTIVE',
+      ...(sourceCode ? { sourceCode } : {}),
+    },
     orderBy: { name: 'asc' },
-    select: { id: true, code: true, name: true, sourceCode: true },
+    select: { id: true, code: true, name: true, sourceCode: true, channel: true },
   })
   return {
     items: rows.map((row) => ({
       value: row.id,
       label: `${row.code} — ${row.name}`,
       code: row.code,
+      name: row.name,
       sourceCode: row.sourceCode,
+      channel: row.channel,
     })),
+  }
+}
+
+export async function attributionSummary(auth: AuthContext) {
+  if (!hasPermission(auth.permissions, ['campaign:view', 'report:view', 'lead:view'])) {
+    throw httpError.accessDenied()
+  }
+  await ensureLeadAttribution()
+  const leads = await prisma.lead.findMany({
+    where: leadScopeWhere(auth),
+    select: {
+      sourceCode: true,
+      source: true,
+      campaignId: true,
+      campaign: true,
+      statusCode: true,
+    },
+  })
+  const sources = new Map<string, { code: string; label: string; total: number; converted: number }>()
+  const campaigns = new Map<string, { id: string | null; label: string; total: number; converted: number }>()
+  for (const lead of leads) {
+    const converted = CONVERTED.has(lead.statusCode || '')
+    const sourceKey = lead.sourceCode || 'OTHER'
+    const sourceRow = sources.get(sourceKey) || {
+      code: sourceKey,
+      label: lead.source || sourceKey,
+      total: 0,
+      converted: 0,
+    }
+    sourceRow.total += 1
+    if (converted) sourceRow.converted += 1
+    if (lead.source) sourceRow.label = lead.source
+    sources.set(sourceKey, sourceRow)
+
+    const campaignKey = lead.campaignId || 'unmapped'
+    const campaignRow = campaigns.get(campaignKey) || {
+      id: lead.campaignId,
+      label: lead.campaign || 'Unmapped',
+      total: 0,
+      converted: 0,
+    }
+    campaignRow.total += 1
+    if (converted) campaignRow.converted += 1
+    if (lead.campaign) campaignRow.label = lead.campaign
+    campaigns.set(campaignKey, campaignRow)
+  }
+  const rate = (converted: number, total: number) => (total ? Math.round((converted / total) * 1000) / 10 : 0)
+  const pack = <T extends { total: number; converted: number }>(rows: T[]) =>
+    rows
+      .map((row) => ({ ...row, conversionRate: rate(row.converted, row.total) }))
+      .sort((a, b) => b.total - a.total)
+  return {
+    sources: pack([...sources.values()]),
+    campaigns: pack([...campaigns.values()]),
   }
 }

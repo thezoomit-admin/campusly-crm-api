@@ -20,6 +20,7 @@ import {
   updatePriority,
   updateQualification,
 } from './leads.service'
+import { correctLeadCampaign, correctLeadSource, listAttributionChanges } from './lead-attribution'
 
 export const leadsRouter = Router()
 
@@ -223,6 +224,40 @@ leadsRouter.patch(
     }
   },
 )
+
+leadsRouter.get('/:id/attribution-changes', requirePermission('lead:view'), async (req, res, next) => {
+  try {
+    res.json(await listAttributionChanges(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.post('/:id/source-correction', requirePermission('lead:change_source', 'You are not authorized to change the lead source.'), async (req, res, next) => {
+  try {
+    res.json(
+      await correctLeadSource(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.post('/:id/campaign-correction', requirePermission(['lead:change_source', 'campaign:manage'], 'You are not authorized to change the lead source.'), async (req, res, next) => {
+  try {
+    res.json(
+      await correctLeadCampaign(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
 
 leadsRouter.patch('/:id', requirePermission('lead:edit'), async (req, res, next) => {
   try {

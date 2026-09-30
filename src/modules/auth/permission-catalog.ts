@@ -14,6 +14,7 @@ export const PERMISSION_CATALOG = [
   { module: 'Lead Management', resource: 'lead', action: 'override_status', description: 'Override required lead status transitions' },
   { module: 'Lead Management', resource: 'lead', action: 'close', description: 'Mark a lead as Lost, Closed, Duplicate, or Invalid' },
   { module: 'Lead Management', resource: 'lead', action: 'reopen', description: 'Reopen a lead from a terminal status' },
+  { module: 'Lead Management', resource: 'lead', action: 'change_source', description: 'Correct a lead source or campaign after creation' },
   { module: 'Follow-up', resource: 'follow_up', action: 'view', description: 'View follow-ups' },
   { module: 'Follow-up', resource: 'follow_up', action: 'create', description: 'Create follow-ups' },
   { module: 'Follow-up', resource: 'follow_up', action: 'edit', description: 'Edit follow-ups' },
@@ -210,6 +211,20 @@ export const ROLE_DEFAULTS: Record<
       'audit:view',
     ],
     scopes: { lead: 'OWN', document: 'OWN', employee_performance: 'OWN' },
+  },
+  marketing_manager: {
+    name: 'Marketing Manager',
+    description: 'Campaign lead visibility and marketing performance',
+    permissions: [
+      'lead:view',
+      'follow_up:view',
+      'activity:view',
+      'report:view',
+      'notification:view',
+      'communication:view',
+      'campaign:view',
+    ],
+    scopes: { lead: 'ALL', document: 'OWN', employee_performance: 'OWN' },
   },
   call_executive: {
     name: 'Call Executive',
