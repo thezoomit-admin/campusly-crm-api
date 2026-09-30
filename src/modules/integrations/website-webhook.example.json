@@ -1,0 +1,20 @@
+{
+  "externalId": "web-submit-0001",
+  "formName": "APPLY_NOW",
+  "name": "John Smith",
+  "phone": "+8801712345678",
+  "phoneCountryCode": "BD",
+  "whatsappSameAsPhone": true,
+  "email": "john.smith@example.com",
+  "currentLocation": "Dhaka",
+  "currentEducation": "HSC",
+  "preferredCountryCode": "CA",
+  "preferredIntakeCode": "SEP_2027",
+  "studyLevel": "UG",
+  "message": "I want to start the admission process for Canada.",
+  "campaign": "Website Apply Now",
+  "utm_source": "facebook",
+  "utm_medium": "paid",
+  "utm_campaign": "canada-admission",
+  "landingPageUrl": "/study-in-canada"
+}

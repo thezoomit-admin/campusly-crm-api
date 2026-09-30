@@ -19,24 +19,49 @@ import { leadsRouter } from './modules/leads/leads.routes'
 import { followUpsRouter } from './modules/follow-ups/follow-ups.routes'
 import { notificationsRouter } from './modules/notifications/notifications.routes'
 import { webhooksRouter } from './modules/integrations/webhooks.routes'
+import { publicWebsiteRouter } from './modules/integrations/public-website.routes'
 import { pipelineRouter } from './modules/pipeline/pipeline.routes'
 import { communicationsRouter } from './modules/communications/communications.routes'
 import { campaignsRouter } from './modules/campaigns/campaigns.routes'
+import { whatsappRouter } from './modules/whatsapp/whatsapp.routes'
+import { whatsappWebhookRouter } from './modules/whatsapp/whatsapp.webhook'
+import { emailRouter } from './modules/email/email.routes'
+import { metaLeadsRouter } from './modules/meta-leads/meta-leads.routes'
 
 export function createApp() {
   const app = express()
 
+  const allowedOrigins = new Set([...config.clientOrigins, ...config.websiteOrigins])
+
   app.use(
     cors({
-      origin: config.clientOrigins,
+      origin(origin, callback) {
+        if (!origin || allowedOrigins.has(origin)) {
+          callback(null, true)
+          return
+        }
+        callback(null, false)
+      },
       credentials: true,
     }),
   )
-  app.use(express.json())
+  const captureRawBody = (req: express.Request, _res: express.Response, buf: Buffer) => {
+    req.rawBody = buf
+  }
+  const jsonParser = express.json({ limit: '256kb', verify: captureRawBody })
+  const emailWebhookParser = express.json({ limit: '12mb', verify: captureRawBody })
+  app.use((req, res, next) => {
+    if (req.originalUrl.startsWith('/api/webhooks/email')) {
+      emailWebhookParser(req, res, next)
+      return
+    }
+    jsonParser(req, res, next)
+  })
   app.use(cookieParser())
   app.use(attachSession)
 
   app.use('/api/health', healthRouter)
+  app.use('/api/public', publicWebsiteRouter)
   app.use('/api/auth', authRouter)
   app.use('/api/me', meRouter)
   app.use('/api/users', usersRouter)
@@ -51,6 +76,10 @@ export function createApp() {
   app.use('/api/notifications', notificationsRouter)
   app.use('/api/communications', communicationsRouter)
   app.use('/api/campaigns', campaignsRouter)
+  app.use('/api/whatsapp', whatsappRouter)
+  app.use('/api/webhooks/whatsapp', whatsappWebhookRouter)
+  app.use('/api/email', emailRouter)
+  app.use('/api/meta-leads', metaLeadsRouter)
   app.use('/api/webhooks', webhooksRouter)
   app.use('/api/pipeline', pipelineRouter)
   app.use('/api/search', searchRouter)

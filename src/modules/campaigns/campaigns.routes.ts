@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { requestIp, requestUserAgent, routeParam } from '../../lib/request'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
+  attributionSummary,
   campaignOptions,
   createCampaign,
   getCampaign,
@@ -29,9 +30,17 @@ function body(req: { body: unknown }) {
   return (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>
 }
 
-campaignsRouter.get('/options', requirePermission(['campaign:view', 'lead:create', 'lead:edit']), async (req, res, next) => {
+campaignsRouter.get('/options', requirePermission(['campaign:view', 'lead:create', 'lead:edit', 'lead:change_source']), async (req, res, next) => {
   try {
-    res.json(await campaignOptions(req.auth!))
+    res.json(await campaignOptions(req.auth!, { sourceCode: queryString(req.query.sourceCode) }))
+  } catch (error) {
+    next(error)
+  }
+})
+
+campaignsRouter.get('/performance', requirePermission(['campaign:view', 'report:view', 'lead:view']), async (req, res, next) => {
+  try {
+    res.json(await attributionSummary(req.auth!))
   } catch (error) {
     next(error)
   }

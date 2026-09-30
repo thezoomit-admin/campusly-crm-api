@@ -3,6 +3,7 @@ import app from './app'
 import { config } from './config'
 import { startFollowUpJobs } from './jobs/follow-up-jobs'
 import { prisma } from './lib/prisma'
+import { ensureLeadAttribution } from './modules/leads/lead-attribution'
 
 const PORT = config.port
 let server: Server | undefined
@@ -62,6 +63,9 @@ async function bootstrap() {
   try {
     await prisma.$connect()
     console.log('✅ Database connected successfully')
+    await ensureLeadAttribution().catch((error) => {
+      console.error('Lead attribution setup skipped:', error)
+    })
 
     server = app.listen(PORT, '0.0.0.0', () => {
       console.log('🚀 Campusly CRM API Started Successfully!')

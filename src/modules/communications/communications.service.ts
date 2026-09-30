@@ -6,7 +6,19 @@ import { hasPermission } from '../auth/access'
 import type { AuthContext } from '../auth/session.service'
 import { createNotification } from '../notifications/notifications.service'
 import { nextLeadCode } from '../leads/lead-code'
+import {
+  COMMUNICATION_CHANNEL,
+  COMMUNICATION_SOURCE,
+  createAttributionData,
+  ensureLeadAttribution,
+  findActiveCampaign,
+  recordCampaignTouch,
+  repeatAttributionData,
+  resolveIncomingAttribution,
+} from '../leads/lead-attribution'
 import { resolveCountryAssignment } from '../leads/leads.assignment'
+import { createSystemFollowUp, daysFromNow } from '../follow-ups/system-follow-up'
+import { websiteFormLabel } from '../integrations/website-forms'
 import {
   asOptionalString,
   asString,
@@ -17,7 +29,7 @@ import {
   titleCaseName,
 } from '../leads/leads.helpers'
 
-type IngestInput = {
+export type IngestInput = {
   channel: CommunicationChannel
   senderName?: string
   senderPhone?: string
@@ -26,11 +38,22 @@ type IngestInput = {
   subject?: string
   message?: string
   sourceCode?: string
+  channelCode?: string
   campaign?: string
   campaignId?: string
   utmSource?: string
   utmMedium?: string
   utmCampaign?: string
+  utmContent?: string
+  utmTerm?: string
+  landingPageUrl?: string
+  phoneCountryCode?: string
+  whatsapp?: string
+  whatsappSameAsPhone?: boolean
+  currentLocation?: string
+  highestQualificationCode?: string
+  preferredIntakeCode?: string
+  preferredDegreeCode?: string
   direction?: string
   externalId?: string
   formName?: string
@@ -39,12 +62,30 @@ type IngestInput = {
   rawPayload?: Record<string, unknown>
 }
 
-const CHANNEL_SOURCE: Record<CommunicationChannel, string> = {
-  WEBSITE: 'WEBSITE',
-  WHATSAPP: 'WHATSAPP',
-  EMAIL: 'EMAIL',
-  META_FACEBOOK: 'META',
-  META_INSTAGRAM: 'META',
+const CHANNEL_SOURCE = COMMUNICATION_SOURCE
+
+function isMetaChannel(channel: CommunicationChannel) {
+  return channel === 'META_FACEBOOK' || channel === 'META_INSTAGRAM'
+}
+
+function metaPlatformLabel(channel: CommunicationChannel) {
+  return channel === 'META_INSTAGRAM' ? 'Instagram' : 'Facebook'
+}
+
+function readMetaAds(raw: Prisma.JsonValue | null) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { adSetName: null as string | null, adName: null as string | null, formLabel: null as string | null }
+  }
+  const body = raw as Record<string, unknown>
+  const nested =
+    body._crm && typeof body._crm === 'object' && !Array.isArray(body._crm)
+      ? (body._crm as Record<string, unknown>)
+      : body
+  return {
+    adSetName: asString(nested.adSetName) || asString(nested.adset_name) || null,
+    adName: asString(nested.adName) || asString(nested.ad_name) || asString(nested.advertisementName) || null,
+    formLabel: asString(nested.formLabel) || null,
+  }
 }
 
 const CHANNEL_ACTIVITY: Record<CommunicationChannel, 'WHATSAPP' | 'EMAIL' | 'MESSAGE' | 'NOTE'> = {
@@ -97,6 +138,14 @@ function serializeEvent(
     utmSource: event.utmSource,
     utmMedium: event.utmMedium,
     utmCampaign: event.utmCampaign,
+    landingPageUrl: event.landingPageUrl,
+    phoneCountryCode: event.phoneCountryCode,
+    whatsapp: event.whatsapp,
+    whatsappSameAsPhone: event.whatsappSameAsPhone,
+    currentLocation: event.currentLocation,
+    highestQualificationCode: event.highestQualificationCode,
+    preferredIntakeCode: event.preferredIntakeCode,
+    preferredDegreeCode: event.preferredDegreeCode,
     direction: event.direction,
     externalId: event.externalId,
     formName: event.formName,
@@ -126,7 +175,7 @@ const eventInclude = {
   campaign: { select: { id: true, code: true, name: true } },
 } as const
 
-async function resolveSystemActorId(preferUserId?: string | null) {
+export async function resolveSystemActorId(preferUserId?: string | null) {
   if (preferUserId) return preferUserId
   const admin = await prisma.user.findFirst({
     where: { primaryRole: { key: 'admin' }, status: 'ACTIVE' },
@@ -143,7 +192,7 @@ async function resolveSystemActorId(preferUserId?: string | null) {
   return any.id
 }
 
-async function findManagers() {
+export async function findManagers() {
   return prisma.user.findMany({
     where: {
       status: 'ACTIVE',
@@ -157,7 +206,12 @@ async function matchExistingLead(input: {
   leadId?: string | null
   phoneNormalized?: string | null
   email?: string | null
+  externalLeadId?: string | null
 }) {
+  if (input.externalLeadId) {
+    const byExternal = await prisma.lead.findUnique({ where: { externalLeadId: input.externalLeadId } })
+    if (byExternal) return byExternal
+  }
   if (input.leadId) {
     const byId = await prisma.lead.findUnique({ where: { id: input.leadId } })
     if (byId) return byId
@@ -194,32 +248,9 @@ async function resolveCampaign(input: {
   campaignId?: string | null
   campaignName?: string | null
   utmCampaign?: string | null
+  sourceCode?: string | null
 }) {
-  if (input.campaignId) {
-    const byId = await prisma.campaign.findUnique({ where: { id: input.campaignId } })
-    if (byId) return byId
-  }
-  const name = input.campaignName || input.utmCampaign
-  if (!name) return null
-  return prisma.campaign.findFirst({
-    where: {
-      OR: [
-        { name: { equals: name, mode: 'insensitive' } },
-        { code: { equals: name, mode: 'insensitive' } },
-        { utmCampaign: { equals: name, mode: 'insensitive' } },
-      ],
-      status: { in: ['ACTIVE', 'PAUSED', 'COMPLETED'] },
-    },
-    orderBy: { updatedAt: 'desc' },
-  })
-}
-
-async function resolveSourceLabel(code: string | null) {
-  if (!code) return null
-  const item = await prisma.masterDataItem.findUnique({
-    where: { categoryKey_code: { categoryKey: 'LEAD_SOURCE', code } },
-  })
-  return item?.name || code
+  return findActiveCampaign(input)
 }
 
 async function resolveCountry(code: string | null) {
@@ -234,7 +265,52 @@ async function resolveCountry(code: string | null) {
   return { code: item?.code || code.toUpperCase(), name: item?.name || code }
 }
 
+async function resolveMasterCode(categoryKey: string, code: string | null | undefined) {
+  if (!code) return null
+  const item = await prisma.masterDataItem.findFirst({
+    where: {
+      categoryKey,
+      status: 'ACTIVE',
+      OR: [
+        { code: { equals: code, mode: 'insensitive' } },
+        { name: { equals: code, mode: 'insensitive' } },
+      ],
+    },
+  })
+  return item?.code || code.toUpperCase()
+}
+
+function formatEnquiryTimeline(opts: {
+  channel: CommunicationChannel
+  name: string
+  countryName: string | null
+  formName: string | null
+  eventAt: Date
+  leadCreated: boolean
+}) {
+  if (isMetaChannel(opts.channel)) {
+    const form = opts.formName ? ` — Form: ${opts.formName}` : ''
+    return `Meta Lead Received — Name: ${opts.name} — Platform: ${metaPlatformLabel(opts.channel)}${form}`
+  }
+  if (opts.channel !== 'WEBSITE') {
+    return opts.leadCreated
+      ? `${TIMELINE_LABEL[opts.channel]} — new lead created`
+      : TIMELINE_LABEL[opts.channel]
+  }
+  const time = opts.eventAt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const country = opts.countryName || 'N/A'
+  const form = websiteFormLabel(opts.formName)
+  return `Website Enquiry Received — Name: ${opts.name} — Country: ${country} — Source: Website — Form: ${form} — Time: ${time}`
+}
+
+function fillIfEmpty<T>(current: T | null | undefined, next: T | null | undefined): T | undefined {
+  if (current !== null && current !== undefined && current !== '') return undefined
+  if (next === null || next === undefined || next === '') return undefined
+  return next
+}
+
 function channelNotifyTitle(channel: CommunicationChannel, leadCreated: boolean) {
+  if (isMetaChannel(channel)) return 'New Meta Lead Received'
   if (leadCreated) return 'New Lead Created'
   if (channel === 'WHATSAPP') return 'New WhatsApp Message'
   if (channel === 'EMAIL') return 'New Email'
@@ -277,7 +353,7 @@ async function notifyCommunication(opts: {
   if (opts.assigned && opts.ownerId) {
     await createNotification({
       userId: opts.ownerId,
-      title: 'Assignment Completed',
+      title: isMetaChannel(opts.channel) ? 'Lead Assigned' : 'Assignment Completed',
       body: `Lead ${opts.leadCode} has been assigned to you.`,
       link,
       type: 'assignment_completed',
@@ -301,30 +377,60 @@ async function processEvent(eventId: string) {
   })
 
   try {
-    if (!event.senderPhoneNormalized && !event.senderEmail) {
-      throw httpError.badRequest('Unable to identify the sender information.')
+    if (isMetaChannel(event.channel) && (!event.senderName?.trim() || !event.senderPhoneNormalized)) {
+      throw httpError.badRequest('Unable to process Meta Lead.')
     }
 
+    if (!event.senderPhoneNormalized && !event.senderEmail) {
+      throw httpError.badRequest(
+        isMetaChannel(event.channel) ? 'Unable to process Meta Lead.' : 'Unable to identify the sender information.',
+      )
+    }
+
+    await ensureLeadAttribution()
+    const sourceCode = event.sourceCode || CHANNEL_SOURCE[event.channel]
+    const channelCode = event.channelCode || COMMUNICATION_CHANNEL[event.channel]
+    const attribution = await resolveIncomingAttribution({
+      sourceCode,
+      channelCode,
+      campaignId: event.campaignId,
+      campaignName: event.campaignName,
+      utmSource: event.utmSource,
+      utmMedium: event.utmMedium,
+      utmCampaign: event.utmCampaign,
+      utmContent: event.utmContent,
+      utmTerm: event.utmTerm,
+      landingPageUrl: event.landingPageUrl,
+      externalLeadId: event.externalId,
+    })
     const matched = await matchExistingLead({
       leadId: event.leadId,
       phoneNormalized: event.senderPhoneNormalized,
       email: event.senderEmail,
+      externalLeadId: attribution.externalLeadId,
     })
 
-    const campaign = await resolveCampaign({
-      campaignId: event.campaignId,
-      campaignName: event.campaignName,
-      utmCampaign: event.utmCampaign,
-    })
-
-    const sourceCode = event.sourceCode || CHANNEL_SOURCE[event.channel]
-    const sourceLabel = await resolveSourceLabel(sourceCode)
     const country = await resolveCountry(event.preferredCountryCode)
     const actorId = await resolveSystemActorId(matched?.ownerId || matched?.createdById)
+    const enquiryAt = event.eventAt || new Date()
+
+    const educationCode = await resolveMasterCode('EDUCATION_LEVEL', event.highestQualificationCode)
+    const intakeCode = await resolveMasterCode('INTAKE', event.preferredIntakeCode)
+    const degreeCode = await resolveMasterCode('STUDY_LEVEL', event.preferredDegreeCode)
+
+    const whatsappSameAsPhone =
+      event.whatsappSameAsPhone ??
+      (event.channel === 'WHATSAPP' ||
+        Boolean(event.whatsapp && event.senderPhoneNormalized && event.whatsapp === event.senderPhoneNormalized))
+    const whatsappValue =
+      event.whatsapp ||
+      (event.channel === 'WHATSAPP' ? event.senderPhoneNormalized : null) ||
+      (whatsappSameAsPhone ? event.senderPhoneNormalized : null)
 
     let leadId = matched?.id || null
     let leadCreated = false
     let assignedNow = false
+    let enteredPool = false
     let leadCode = matched?.code || ''
     let leadName = matched?.name || ''
     let ownerId = matched?.ownerId || null
@@ -334,28 +440,67 @@ async function processEvent(eventId: string) {
         where: { id: matched.id },
         data: {
           updatedAt: new Date(),
-          ...(matched.email || !event.senderEmail ? {} : { email: event.senderEmail }),
-          ...(matched.phone || !event.senderPhone
-            ? {}
-            : {
+          lastEnquiryAt: enquiryAt,
+          ...repeatAttributionData(matched, attribution),
+          ...(fillIfEmpty(matched.email, event.senderEmail) !== undefined
+            ? { email: event.senderEmail }
+            : {}),
+          ...(fillIfEmpty(matched.phone, event.senderPhone) !== undefined
+            ? {
                 phone: event.senderPhone,
                 phoneNormalized: event.senderPhoneNormalized,
-              }),
-          ...(matched.sourceLocked || matched.sourceCode
+              }
+            : {}),
+          ...(fillIfEmpty(matched.phoneCountryCode, event.phoneCountryCode) !== undefined
+            ? { phoneCountryCode: event.phoneCountryCode }
+            : {}),
+          ...(fillIfEmpty(matched.whatsapp, whatsappValue) !== undefined
+            ? { whatsapp: whatsappValue, whatsappSameAsPhone: Boolean(whatsappSameAsPhone) }
+            : {}),
+          ...(fillIfEmpty(matched.currentLocation, event.currentLocation) !== undefined
+            ? { currentLocation: event.currentLocation }
+            : {}),
+          ...(fillIfEmpty(matched.preferredCountryCode, country.code) !== undefined
+            ? { preferredCountryCode: country.code, country: country.name }
+            : {}),
+          ...(fillIfEmpty(matched.highestQualificationCode, educationCode) !== undefined
+            ? { highestQualificationCode: educationCode }
+            : {}),
+          ...(fillIfEmpty(matched.preferredIntakeCode, intakeCode) !== undefined
+            ? { preferredIntakeCode: intakeCode }
+            : {}),
+          ...(fillIfEmpty(matched.preferredDegreeCode, degreeCode) !== undefined
+            ? { preferredDegreeCode: degreeCode }
+            : {}),
+          ...(fillIfEmpty(matched.landingPageUrl, event.landingPageUrl) !== undefined
+            ? { landingPageUrl: event.landingPageUrl }
+            : {}),
+          ...(fillIfEmpty(matched.remarks, event.message ? event.message.slice(0, 1000) : null) !== undefined
+            ? { remarks: event.message!.slice(0, 1000) }
+            : {}),
+          ...(matched.sourceCode
             ? {}
-            : { sourceCode, source: sourceLabel }),
-          ...(matched.campaignId || !campaign
-            ? matched.campaign || !event.campaignName
-              ? {}
-              : { campaign: event.campaignName }
             : {
-                campaignId: campaign.id,
-                campaign: campaign.name,
-                utmSource: event.utmSource || campaign.utmSource,
-                utmMedium: event.utmMedium || campaign.utmMedium,
-                utmCampaign: event.utmCampaign || campaign.utmCampaign,
+                sourceCode: attribution.sourceCode,
+                source: attribution.sourceLabel,
+                channelCode: attribution.channelCode,
+                sourceLocked: true,
               }),
         },
+      })
+      await recordCampaignTouch(prisma, {
+        leadId: matched.id,
+        sourceCode: attribution.sourceCode,
+        channelCode: attribution.channelCode,
+        campaignId: attribution.campaignId,
+        campaignName: attribution.campaignName,
+        externalLeadId: attribution.externalLeadId,
+        receivedAt: enquiryAt,
+        utmSource: attribution.utmSource,
+        utmMedium: attribution.utmMedium,
+        utmCampaign: attribution.utmCampaign,
+        utmContent: attribution.utmContent,
+        utmTerm: attribution.utmTerm,
       })
     } else {
       const assignment = await resolveCountryAssignment(country.code)
@@ -376,16 +521,16 @@ async function processEvent(eventId: string) {
             name,
             phone: event.senderPhone,
             phoneNormalized: event.senderPhoneNormalized,
+            phoneCountryCode: event.phoneCountryCode,
             email: event.senderEmail,
             preferredCountryCode: country.code,
             country: country.name,
-            sourceCode,
-            source: sourceLabel,
-            campaign: campaign?.name || event.campaignName,
-            campaignId: campaign?.id || null,
-            utmSource: event.utmSource || campaign?.utmSource || null,
-            utmMedium: event.utmMedium || campaign?.utmMedium || null,
-            utmCampaign: event.utmCampaign || campaign?.utmCampaign || null,
+            currentLocation: event.currentLocation,
+            highestQualificationCode: educationCode,
+            preferredIntakeCode: intakeCode,
+            preferredDegreeCode: degreeCode,
+            ...createAttributionData(attribution, enquiryAt, true),
+            landingPageUrl: attribution.landingPageUrl || event.landingPageUrl,
             remarks: event.message ? event.message.slice(0, 1000) : null,
             status: newStatus?.name || 'New',
             statusCode: newStatus?.code || 'NEW',
@@ -395,8 +540,9 @@ async function processEvent(eventId: string) {
             createdById: actorId,
             updatedById: actorId,
             sourceLocked: true,
-            whatsappSameAsPhone: event.channel === 'WHATSAPP',
-            whatsapp: event.channel === 'WHATSAPP' ? event.senderPhoneNormalized : null,
+            whatsappSameAsPhone: Boolean(whatsappSameAsPhone),
+            whatsapp: whatsappValue,
+            lastEnquiryAt: enquiryAt,
           },
         })
 
@@ -423,15 +569,55 @@ async function processEvent(eventId: string) {
           },
         })
 
+        await recordCampaignTouch(tx, {
+          leadId: lead.id,
+          sourceCode: attribution.sourceCode,
+          channelCode: attribution.channelCode,
+          campaignId: attribution.campaignId,
+          campaignName: attribution.campaignName,
+          externalLeadId: attribution.externalLeadId,
+          receivedAt: enquiryAt,
+          utmSource: attribution.utmSource,
+          utmMedium: attribution.utmMedium,
+          utmCampaign: attribution.utmCampaign,
+          utmContent: attribution.utmContent,
+          utmTerm: attribution.utmTerm,
+        })
+
         return lead
       })
 
       leadId = created.id
       leadCreated = true
       assignedNow = Boolean(assignment.ownerId)
+      enteredPool = !assignment.ownerId
       leadCode = created.code
       leadName = created.name
       ownerId = created.ownerId
+
+      if (assignedNow && ownerId) {
+        try {
+          await createSystemFollowUp({
+            leadId: created.id,
+            contactName: created.name,
+            type: 'Call',
+            purpose: 'Initial Contact',
+            nextAction: 'Make first contact call',
+            dueAt: daysFromNow(1),
+            priority: 'Medium',
+            ownerId,
+            ownerName: created.ownerName,
+            reason: isMetaChannel(event.channel)
+              ? 'Meta Lead Assigned — First Follow-up'
+              : event.channel === 'WEBSITE'
+                ? 'Website Lead Assigned — First Follow-up'
+                : `${TIMELINE_LABEL[event.channel]} — First Follow-up`,
+            actorUserId: actorId,
+          })
+        } catch (error) {
+          console.error('[communications] Auto follow-up on assign failed:', error)
+        }
+      }
     }
 
     if (!leadId) throw httpError.badRequest('Unable to process the communication.')
@@ -440,7 +626,22 @@ async function processEvent(eventId: string) {
     const notes =
       event.message ||
       event.subject ||
-      `${direction} ${TIMELINE_LABEL[event.channel]}${event.formName ? ` (${event.formName})` : ''}`
+      `${direction} ${TIMELINE_LABEL[event.channel]}${event.formName ? ` (${websiteFormLabel(event.formName)})` : ''}`
+
+    const timelineNotes = [
+      formatEnquiryTimeline({
+        channel: event.channel,
+        name: leadName,
+        countryName: country.name,
+        formName: event.formName,
+        eventAt: enquiryAt,
+        leadCreated,
+      }),
+      attribution.campaignName ? `Campaign: ${attribution.campaignName}` : null,
+      attribution.unmapped ? 'Source: Other / Unmapped' : null,
+    ]
+      .filter(Boolean)
+      .join(' — ')
 
     const activity = await prisma.activity.create({
       data: {
@@ -451,7 +652,7 @@ async function processEvent(eventId: string) {
         relatedId: leadId,
         outcome: leadCreated ? 'Lead Created' : 'Lead Updated',
         notes,
-        occurredAt: event.eventAt,
+        occurredAt: enquiryAt,
         metadata: {
           source: 'communication_hub',
           channel: event.channel,
@@ -459,6 +660,8 @@ async function processEvent(eventId: string) {
           communicationEventId: event.id,
           formName: event.formName,
           subject: event.subject,
+          landingPageUrl: event.landingPageUrl,
+          duplicate: !leadCreated,
         },
       },
     })
@@ -471,19 +674,54 @@ async function processEvent(eventId: string) {
         relatedType: 'lead',
         relatedId: leadId,
         outcome: 'Timeline',
-        notes: leadCreated
-          ? `${TIMELINE_LABEL[event.channel]} — new lead created`
-          : TIMELINE_LABEL[event.channel],
-        occurredAt: event.eventAt,
+        notes: timelineNotes,
+        occurredAt: enquiryAt,
         metadata: {
           source: 'communication_hub',
           communicationEventId: event.id,
           timeline: true,
+          channel: event.channel,
+          formName: event.formName,
         },
       },
     })
 
+    const metaAds = isMetaChannel(event.channel) ? readMetaAds(event.rawPayload) : null
+    if (metaAds && leadCreated) {
+      await prisma.activity.create({
+        data: {
+          type: 'NOTE',
+          userId: actorId,
+          relatedName: leadName,
+          relatedType: 'lead',
+          relatedId: leadId,
+          outcome: 'Lead Created',
+          notes: event.channel === 'META_INSTAGRAM' ? 'Instagram Lead Created' : 'Facebook Lead Created',
+          occurredAt: enquiryAt,
+          metadata: { source: 'communication_hub', communicationEventId: event.id, timeline: true },
+        },
+      })
+    }
+    if (metaAds && (event.campaignName || metaAds.adSetName || metaAds.adName)) {
+      await prisma.activity.create({
+        data: {
+          type: 'NOTE',
+          userId: actorId,
+          relatedName: leadName,
+          relatedType: 'lead',
+          relatedId: leadId,
+          outcome: 'Campaign',
+          notes: `Campaign Information Added — Campaign: ${event.campaignName || 'N/A'} — Ad Set: ${metaAds.adSetName || 'N/A'} — Advertisement: ${metaAds.adName || 'N/A'}`,
+          occurredAt: enquiryAt,
+          metadata: { source: 'communication_hub', communicationEventId: event.id, timeline: true },
+        },
+      })
+    }
+
     if (assignedNow && ownerId) {
+      const assigneeName =
+        (await prisma.user.findUnique({ where: { id: ownerId }, select: { fullName: true } }))?.fullName ||
+        'Call Executive'
       await prisma.activity.create({
         data: {
           type: 'NOTE',
@@ -492,9 +730,51 @@ async function processEvent(eventId: string) {
           relatedType: 'lead',
           relatedId: leadId,
           outcome: 'Assigned',
-          notes: `Lead assigned to ${(await prisma.user.findUnique({ where: { id: ownerId }, select: { fullName: true } }))?.fullName || 'Call Executive'}`,
+          notes: isMetaChannel(event.channel) ? `Lead Assigned — ${assigneeName}` : `Lead assigned to ${assigneeName}`,
           occurredAt: new Date(),
-          metadata: { source: 'communication_hub', communicationEventId: event.id },
+          metadata: { source: 'communication_hub', communicationEventId: event.id, timeline: true },
+        },
+      })
+      if (isMetaChannel(event.channel)) {
+        await prisma.activity.create({
+          data: {
+            type: 'NOTE',
+            userId: actorId,
+            relatedName: leadName,
+            relatedType: 'lead',
+            relatedId: leadId,
+            outcome: 'Follow-up',
+            notes: 'Employee Follow-up Started',
+            occurredAt: new Date(),
+            metadata: { source: 'communication_hub', communicationEventId: event.id, timeline: true },
+          },
+        })
+        await createNotification({
+          userId: ownerId,
+          title: 'Follow-up Pending',
+          body: `Follow-up is pending for ${leadCode} (${leadName}).`,
+          link: `/leads/${leadId}`,
+          type: 'follow_up_pending',
+          leadId,
+          dedupeKey: `meta-follow-up:${event.id}:${ownerId}`,
+        }).catch(() => undefined)
+      }
+    }
+
+    if (enteredPool) {
+      await prisma.activity.create({
+        data: {
+          type: 'NOTE',
+          userId: actorId,
+          relatedName: leadName,
+          relatedType: 'lead',
+          relatedId: leadId,
+          outcome: 'Lead Pool',
+          notes: isMetaChannel(event.channel)
+            ? 'Lead Waiting in Lead Pool'
+            : 'Lead entered Lead Pool — no matching country assignee available',
+          occurredAt: new Date(),
+          metadata: { source: 'communication_hub', communicationEventId: event.id, timeline: true },
         },
       })
     }
@@ -508,8 +788,8 @@ async function processEvent(eventId: string) {
         leadId,
         leadCreated,
         activityId: activity.id,
-        campaignId: campaign?.id || event.campaignId,
-        campaignName: campaign?.name || event.campaignName,
+        campaignId: attribution.campaignId || event.campaignId,
+        campaignName: attribution.campaignName || event.campaignName,
         sourceCode,
         processedAt: new Date(),
         processingError: null,
@@ -540,15 +820,33 @@ async function processEvent(eventId: string) {
       assigned: assignedNow,
     })
 
-    await createNotification({
-      userId: ownerId || (await findManagers())[0]?.id || actorId,
-      title: 'New Communication Received',
-      body: `${TIMELINE_LABEL[event.channel]} for ${leadCode}.`,
-      link: `/leads/${leadId}`,
-      type: 'new_communication_received',
-      leadId,
-      dedupeKey: `comm-received:${event.id}`,
-    }).catch(() => undefined)
+    if (!isMetaChannel(event.channel)) {
+      await createNotification({
+        userId: ownerId || (await findManagers())[0]?.id || actorId,
+        title: 'New Communication Received',
+        body: `${TIMELINE_LABEL[event.channel]} for ${leadCode}.`,
+        link: `/leads/${leadId}`,
+        type: 'new_communication_received',
+        leadId,
+        dedupeKey: `comm-received:${event.id}`,
+      }).catch(() => undefined)
+    }
+
+    if (enteredPool) {
+      for (const manager of await findManagers()) {
+        await createNotification({
+          userId: manager.id,
+          title: isMetaChannel(event.channel) ? 'Lead Waiting in Lead Pool' : 'Lead Entered Pool',
+          body: isMetaChannel(event.channel)
+            ? `${leadCode} (${leadName}) is waiting in the Lead Pool.`
+            : `${leadCode} (${leadName}) entered the Lead Pool from a website enquiry.`,
+          link: `/leads/pool`,
+          type: 'lead_pool_entered',
+          leadId,
+          dedupeKey: `lead-pool:${event.id}:${manager.id}`,
+        }).catch(() => undefined)
+      }
+    }
 
     return serializeEvent(updated)
   } catch (error) {
@@ -570,6 +868,7 @@ async function processEvent(eventId: string) {
 }
 
 export async function ingestCommunication(input: IngestInput) {
+  await ensureLeadAttribution()
   const channel = input.channel
   const senderPhone = asOptionalString(input.senderPhone, 40)
   const phoneNormalized = senderPhone ? normalizePhone(senderPhone) : null
@@ -593,11 +892,20 @@ export async function ingestCommunication(input: IngestInput) {
     }
   }
 
+  const sourceCode = asOptionalString(input.sourceCode, 40)?.toUpperCase() || CHANNEL_SOURCE[channel]
   const campaign = await resolveCampaign({
     campaignId: asOptionalString(input.campaignId, 80),
     campaignName: asOptionalString(input.campaign, 160),
     utmCampaign: asOptionalString(input.utmCampaign, 160),
+    sourceCode,
   })
+
+  const whatsappRaw = asOptionalString(input.whatsapp, 40)
+  const whatsappNormalized = whatsappRaw ? normalizePhone(whatsappRaw) : null
+  const whatsappSameAsPhone =
+    typeof input.whatsappSameAsPhone === 'boolean'
+      ? input.whatsappSameAsPhone
+      : Boolean(whatsappNormalized && phoneNormalized && whatsappNormalized === phoneNormalized)
 
   const event = await prisma.communicationEvent.create({
     data: {
@@ -610,12 +918,23 @@ export async function ingestCommunication(input: IngestInput) {
       preferredCountryCode: asOptionalString(input.preferredCountryCode, 40)?.toUpperCase() || null,
       subject: asOptionalString(input.subject, 300),
       message: asOptionalString(input.message, 5000),
-      sourceCode: asOptionalString(input.sourceCode, 40)?.toUpperCase() || CHANNEL_SOURCE[channel],
+      sourceCode,
+      channelCode: asOptionalString(input.channelCode, 40)?.toUpperCase() || COMMUNICATION_CHANNEL[channel],
       campaignName: campaign?.name || asOptionalString(input.campaign, 160),
       campaignId: campaign?.id || null,
       utmSource: asOptionalString(input.utmSource, 120) || campaign?.utmSource || null,
       utmMedium: asOptionalString(input.utmMedium, 120) || campaign?.utmMedium || null,
       utmCampaign: asOptionalString(input.utmCampaign, 120) || campaign?.utmCampaign || null,
+      utmContent: asOptionalString(input.utmContent, 120),
+      utmTerm: asOptionalString(input.utmTerm, 120),
+      landingPageUrl: asOptionalString(input.landingPageUrl, 2000),
+      phoneCountryCode: asOptionalString(input.phoneCountryCode, 8)?.toUpperCase() || null,
+      whatsapp: whatsappNormalized,
+      whatsappSameAsPhone,
+      currentLocation: asOptionalString(input.currentLocation, 120),
+      highestQualificationCode: asOptionalString(input.highestQualificationCode, 40)?.toUpperCase() || null,
+      preferredIntakeCode: asOptionalString(input.preferredIntakeCode, 40)?.toUpperCase() || null,
+      preferredDegreeCode: asOptionalString(input.preferredDegreeCode, 40)?.toUpperCase() || null,
       direction: asString(input.direction).toLowerCase() === 'outgoing' ? 'outgoing' : 'incoming',
       externalId,
       formName: asOptionalString(input.formName, 120),
@@ -761,7 +1080,12 @@ export function normalizeWebhookBody(
   const country =
     asString(body.preferredCountryCode) ||
     asString(body.country) ||
-    asString(body.preferred_country)
+    asString(body.preferred_country) ||
+    asString(body.preferredCountry)
+  const sameAsPhone =
+    body.whatsappSameAsPhone === true ||
+    body.whatsapp_same_as_phone === true ||
+    String(body.whatsappSameAsPhone || '').toLowerCase() === 'true'
 
   return {
     channel,
@@ -777,8 +1101,31 @@ export function normalizeWebhookBody(
     utmSource: asString(body.utmSource) || asString(body.utm_source) || undefined,
     utmMedium: asString(body.utmMedium) || asString(body.utm_medium) || undefined,
     utmCampaign: asString(body.utmCampaign) || asString(body.utm_campaign) || undefined,
+    landingPageUrl:
+      asString(body.landingPageUrl) ||
+      asString(body.landing_page_url) ||
+      asString(body.landingPage) ||
+      asString(body.pageUrl) ||
+      undefined,
+    phoneCountryCode: asString(body.phoneCountryCode) || undefined,
+    whatsapp: asString(body.whatsapp) || asString(body.whatsappNumber) || undefined,
+    whatsappSameAsPhone: sameAsPhone,
+    currentLocation: asString(body.currentLocation) || asString(body.location) || undefined,
+    highestQualificationCode:
+      asString(body.highestQualificationCode) ||
+      asString(body.currentEducation) ||
+      asString(body.educationLevel) ||
+      undefined,
+    preferredIntakeCode: asString(body.preferredIntakeCode) || asString(body.intake) || undefined,
+    preferredDegreeCode:
+      asString(body.preferredDegreeCode) || asString(body.studyLevel) || asString(body.preferred_degree) || undefined,
     direction: asString(body.direction) || 'incoming',
-    externalId: asString(body.externalId) || asString(body.id) || asString(body.messageId) || undefined,
+    externalId:
+      asString(body.externalId) ||
+      asString(body.id) ||
+      asString(body.messageId) ||
+      asString(body.submissionId) ||
+      undefined,
     formName: asString(body.formName) || asString(body.form_name) || asString(body.form) || undefined,
     eventAt: asString(body.eventAt) || asString(body.occurredAt) || asString(body.created_time) || undefined,
     leadId: asString(body.leadId) || undefined,

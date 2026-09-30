@@ -3,6 +3,12 @@ import { writeAuditLog } from '../../lib/audit'
 import { HttpError, httpError } from '../../lib/http-error'
 import { prisma } from '../../lib/prisma'
 import type { AuthContext } from '../auth/session.service'
+import {
+  assertExternalLeadAvailable,
+  ensureLeadAttribution,
+  parseManualAttribution,
+  recordCampaignTouch,
+} from './lead-attribution'
 import { nextLeadCode } from './lead-code'
 import { resolveCountryAssignment } from './leads.assignment'
 import {
@@ -128,12 +134,27 @@ function serializeLead(lead: LeadRecord) {
     specificContactTime: lead.specificContactTime,
     source: lead.source,
     sourceCode: lead.sourceCode,
+    channelCode: lead.channelCode,
     sourceLocked: lead.sourceLocked,
+    latestSource: lead.latestSource,
+    latestSourceCode: lead.latestSourceCode,
+    latestChannelCode: lead.latestChannelCode,
     campaign: lead.campaign,
     campaignId: lead.campaignId,
+    latestCampaign: lead.latestCampaign,
+    latestCampaignId: lead.latestCampaignId,
     utmSource: lead.utmSource,
     utmMedium: lead.utmMedium,
     utmCampaign: lead.utmCampaign,
+    utmContent: lead.utmContent,
+    utmTerm: lead.utmTerm,
+    landingPageUrl: lead.landingPageUrl,
+    externalLeadId: lead.externalLeadId,
+    sourceDetails: lead.sourceDetails,
+    referralBy: lead.referralBy,
+    referralDetails: lead.referralDetails,
+    firstTouchAt: lead.firstTouchAt ? lead.firstTouchAt.toISOString() : null,
+    lastEnquiryAt: lead.lastEnquiryAt ? lead.lastEnquiryAt.toISOString() : null,
     remarks: lead.remarks,
     notes: lead.notes,
     status: lead.status,
@@ -317,7 +338,25 @@ type ParsedLead = {
   specificContactTime: string | null
   sourceCode: string | null
   source: string | null
+  channelCode: string | null
   campaign: string | null
+  campaignId: string | null
+  latestSource: string | null
+  latestSourceCode: string | null
+  latestChannelCode: string | null
+  latestCampaign: string | null
+  latestCampaignId: string | null
+  utmSource: string | null
+  utmMedium: string | null
+  utmCampaign: string | null
+  utmContent: string | null
+  utmTerm: string | null
+  landingPageUrl: string | null
+  externalLeadId: string | null
+  sourceDetails: string | null
+  referralBy: string | null
+  referralDetails: string | null
+  firstTouchAt: Date | null
   remarks: string | null
   notes: string | null
 }
@@ -347,10 +386,11 @@ async function parseLeadInput(body: Record<string, unknown>, mode: 'create' | 'u
     required: mode === 'create',
     message: 'Please select a preferred country.',
   })
-  const source = await resolveMasterCode('LEAD_SOURCE', body.sourceCode, 'sourceCode', fields, {
-    required: mode === 'create',
-    message: 'Please select a lead source.',
-  })
+  const manualAttribution = mode === 'create' ? await parseManualAttribution(body, fields) : null
+  const source =
+    mode === 'create'
+      ? null
+      : await resolveMasterCode('LEAD_SOURCE', body.sourceCode, 'sourceCode', fields)
   const degree = await resolveMasterCode('STUDY_LEVEL', body.preferredDegreeCode, 'preferredDegreeCode', fields)
   const intake = await resolveMasterCode('INTAKE', body.preferredIntakeCode, 'preferredIntakeCode', fields)
   if (intake?.extras && typeof intake.extras === 'object' && intake.extras !== null && 'startDate' in intake.extras) {
@@ -442,9 +482,34 @@ async function parseLeadInput(body: Record<string, unknown>, mode: 'create' | 'u
     preferredContactMethodCode: contactMethod?.code || null,
     preferredContactTimeCode: contactTime?.code || null,
     specificContactTime: contactTime?.code === 'SPECIFIC' ? asOptionalString(body.specificContactTime, 40) : null,
-    sourceCode: source?.code || null,
-    source: source?.name || null,
-    campaign: asOptionalString(body.campaign, 160),
+    sourceCode: mode === 'create' ? manualAttribution?.sourceCode || null : source?.code || null,
+    source: mode === 'create' ? manualAttribution?.sourceLabel || null : source?.name || null,
+    channelCode: mode === 'create' ? manualAttribution?.channelCode || null : asOptionalString(body.channelCode, 40),
+    campaign: mode === 'create' ? manualAttribution?.campaignName || null : asOptionalString(body.campaign, 160),
+    campaignId: mode === 'create' ? manualAttribution?.campaignId || null : asOptionalString(body.campaignId, 80),
+    latestSource: mode === 'create' ? manualAttribution?.sourceLabel || null : asOptionalString(body.latestSource, 120),
+    latestSourceCode: mode === 'create' ? manualAttribution?.sourceCode || null : asOptionalString(body.latestSourceCode, 40),
+    latestChannelCode: mode === 'create' ? manualAttribution?.channelCode || null : asOptionalString(body.latestChannelCode, 40),
+    latestCampaign: mode === 'create' ? manualAttribution?.campaignName || null : asOptionalString(body.latestCampaign, 160),
+    latestCampaignId: mode === 'create' ? manualAttribution?.campaignId || null : asOptionalString(body.latestCampaignId, 80),
+    utmSource: mode === 'create' ? manualAttribution?.utmSource || null : asOptionalString(body.utmSource, 120),
+    utmMedium: mode === 'create' ? manualAttribution?.utmMedium || null : asOptionalString(body.utmMedium, 120),
+    utmCampaign: mode === 'create' ? manualAttribution?.utmCampaign || null : asOptionalString(body.utmCampaign, 120),
+    utmContent: mode === 'create' ? manualAttribution?.utmContent || null : asOptionalString(body.utmContent, 120),
+    utmTerm: mode === 'create' ? manualAttribution?.utmTerm || null : asOptionalString(body.utmTerm, 120),
+    landingPageUrl: mode === 'create' ? manualAttribution?.landingPageUrl || null : asOptionalString(body.landingPageUrl, 2000),
+    externalLeadId: mode === 'create' ? manualAttribution?.externalLeadId || null : asOptionalString(body.externalLeadId, 200),
+    sourceDetails: mode === 'create' ? manualAttribution?.sourceDetails || null : asOptionalString(body.sourceDetails, 500),
+    referralBy: mode === 'create' ? manualAttribution?.referralBy || null : asOptionalString(body.referralBy, 150),
+    referralDetails: mode === 'create' ? manualAttribution?.referralDetails || null : asOptionalString(body.referralDetails, 500),
+    firstTouchAt:
+      mode === 'create'
+        ? manualAttribution
+          ? new Date()
+          : null
+        : body.firstTouchAt
+          ? new Date(String(body.firstTouchAt))
+          : null,
     remarks,
     notes: asOptionalString(body.notes, 1000),
   }
@@ -615,7 +680,9 @@ export async function getLead(auth: AuthContext, id: string) {
 }
 
 export async function createLead(auth: AuthContext, body: Record<string, unknown>, meta: AuditMeta) {
+  await ensureLeadAttribution()
   const parsed = await parseLeadInput(body, 'create')
+  await assertExternalLeadAvailable(parsed.externalLeadId)
   const duplicate = await findDuplicate(parsed.phoneNormalized)
   if (duplicate) {
     const createAnyway = body.createAnyway === true || body.createAnyway === 'true'
@@ -647,6 +714,20 @@ export async function createLead(auth: AuthContext, body: Record<string, unknown
         ...metrics,
       },
       include: leadInclude,
+    })
+    await recordCampaignTouch(tx, {
+      leadId: created.id,
+      sourceCode: created.sourceCode,
+      channelCode: created.channelCode,
+      campaignId: created.campaignId,
+      campaignName: created.campaign,
+      externalLeadId: created.externalLeadId,
+      receivedAt: created.firstTouchAt || created.createdAt,
+      utmSource: created.utmSource,
+      utmMedium: created.utmMedium,
+      utmCampaign: created.utmCampaign,
+      utmContent: created.utmContent,
+      utmTerm: created.utmTerm,
     })
     await tx.leadAssignment.create({
       data: {
@@ -696,12 +777,36 @@ export async function createLead(auth: AuthContext, body: Record<string, unknown
   return { lead: serializeLead(lead), message: `Lead Created Successfully — Lead ID: ${lead.code}` }
 }
 
-function pickAllowed(body: Record<string, unknown>, auth: AuthContext, sourceLocked: boolean) {
+const PRESERVED_ATTRIBUTION = new Set([
+  'sourceCode',
+  'source',
+  'channelCode',
+  'campaign',
+  'campaignId',
+  'latestSource',
+  'latestSourceCode',
+  'latestChannelCode',
+  'latestCampaign',
+  'latestCampaignId',
+  'utmSource',
+  'utmMedium',
+  'utmCampaign',
+  'utmContent',
+  'utmTerm',
+  'landingPageUrl',
+  'externalLeadId',
+  'sourceDetails',
+  'referralBy',
+  'referralDetails',
+  'firstTouchAt',
+])
+
+function pickAllowed(body: Record<string, unknown>, auth: AuthContext) {
   const allowed = allowedFieldsFor(auth)
   const next: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(body)) {
+    if (PRESERVED_ATTRIBUTION.has(key)) continue
     if (!allowed.has(key)) continue
-    if (sourceLocked && ['sourceCode', 'campaign', 'utmSource', 'utmMedium', 'utmCampaign'].includes(key)) continue
     next[key] = value
   }
   return next
@@ -709,7 +814,7 @@ function pickAllowed(body: Record<string, unknown>, auth: AuthContext, sourceLoc
 
 export async function updateLead(auth: AuthContext, id: string, body: Record<string, unknown>, meta: AuditMeta) {
   const current = await assertCanViewLead(auth, id)
-  const filtered = pickAllowed(body, auth, current.sourceLocked)
+  const filtered = pickAllowed(body, auth)
   const mergedBody = { ...serializeLead(await prisma.lead.findUniqueOrThrow({ where: { id }, include: leadInclude })), ...filtered }
   const parsed = await parseLeadInput(mergedBody, 'update')
 
@@ -730,11 +835,15 @@ export async function updateLead(auth: AuthContext, id: string, body: Record<str
   }
 
   const metrics = await metricsFor(parsed, current)
+  const leadData: Partial<ParsedLead> = { ...parsed }
+  for (const key of PRESERVED_ATTRIBUTION) {
+    delete leadData[key as keyof ParsedLead]
+  }
   const lead = await prisma.$transaction(async (tx) => {
     const updated = await tx.lead.update({
       where: { id },
       data: {
-        ...parsed,
+        ...leadData,
         ownerId,
         ownerName,
         assignedCountryTeamId,

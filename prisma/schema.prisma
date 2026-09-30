@@ -158,6 +158,11 @@ model User {
   notifications       Notification[]         @relation("NotificationRecipient")
   campaignsCreated    Campaign[]             @relation("CampaignCreatedBy")
   campaignsUpdated    Campaign[]             @relation("CampaignUpdatedBy")
+  attributionChanges  LeadAttributionChange[]
+  whatsappConversationsAssigned WhatsAppConversation[] @relation("WhatsAppConversationAssignee")
+  whatsappMessagesSent WhatsAppMessage[]     @relation("WhatsAppMessageSender")
+  emailThreadsAssigned EmailThread[]         @relation("EmailThreadAssignee")
+  emailMessagesSent    EmailMessage[]        @relation("EmailMessageSender")
 
   @@index([primaryRoleId])
   @@index([departmentId])
@@ -506,16 +511,31 @@ model Lead {
   preferredContactTimeCode   String? @map("preferred_contact_time_code")
   specificContactTime        String? @map("specific_contact_time")
 
-  source         String?
-  sourceCode     String?  @map("source_code")
-  sourceLocked   Boolean  @default(false) @map("source_locked")
+  source           String?
+  sourceCode       String?  @map("source_code")
+  channelCode      String?  @map("channel_code")
+  sourceLocked     Boolean  @default(false) @map("source_locked")
+  latestSource     String?  @map("latest_source")
+  latestSourceCode String?  @map("latest_source_code")
+  latestChannelCode String? @map("latest_channel_code")
   campaign       String?
   campaignId     String?  @map("campaign_id") @db.Uuid
+  latestCampaign   String?  @map("latest_campaign")
+  latestCampaignId String?  @map("latest_campaign_id") @db.Uuid
   utmSource      String?  @map("utm_source")
   utmMedium      String?  @map("utm_medium")
   utmCampaign    String?  @map("utm_campaign")
+  utmContent     String?  @map("utm_content")
+  utmTerm        String?  @map("utm_term")
+  landingPageUrl String?  @map("landing_page_url") @db.Text
+  externalLeadId String?  @unique @map("external_lead_id")
+  sourceDetails  String?  @map("source_details") @db.VarChar(500)
+  referralBy     String?  @map("referral_by")
+  referralDetails String? @map("referral_details") @db.Text
+  firstTouchAt   DateTime? @map("first_touch_at")
   remarks        String?  @db.Text
   notes          String?  @db.Text
+  lastEnquiryAt  DateTime? @map("last_enquiry_at")
 
   assignedCountryTeamId String? @map("assigned_country_team_id") @db.Uuid
   ownerName             String? @map("owner_name")
@@ -550,12 +570,18 @@ model Lead {
   createdBy           User?  @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy           User?  @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   marketingCampaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  latestMarketingCampaign Campaign? @relation("LeadLatestCampaign", fields: [latestCampaignId], references: [id], onDelete: SetNull)
   assignments         LeadAssignment[]
   qualificationHistory LeadQualificationHistory[]
   statusHistory       LeadStatusHistory[]
   followUps           FollowUp[]
   notifications       Notification[]
   communicationEvents CommunicationEvent[]
+  metaLeads           MetaLead[]
+  campaignTouches     LeadCampaignTouch[]
+  attributionChanges  LeadAttributionChange[]
+  whatsappConversations WhatsAppConversation[]
+  emailThreads        EmailThread[]
 
   @@index([status])
   @@index([ownerId])
@@ -563,7 +589,9 @@ model Lead {
   @@index([phoneNormalized])
   @@index([preferredCountryCode])
   @@index([sourceCode])
+  @@index([channelCode])
   @@index([campaignId])
+  @@index([latestCampaignId])
   @@map("leads")
 }
 
@@ -802,6 +830,11 @@ enum CampaignStatus {
   ARCHIVED
 }
 
+enum AttributionChangeKind {
+  SOURCE
+  CAMPAIGN
+}
+
 model Campaign {
   id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code        String         @unique
@@ -809,7 +842,7 @@ model Campaign {
   description String?        @db.Text
   sourceCode  String?        @map("source_code")
   channel     String?
-  status      CampaignStatus @default(DRAFT)
+  status      CampaignStatus @default(ACTIVE)
   startDate   DateTime?      @map("start_date") @db.Date
   endDate     DateTime?      @map("end_date") @db.Date
   budget      Float?
@@ -823,7 +856,10 @@ model Campaign {
   createdBy   User?          @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy   User?          @relation("CampaignUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   leads       Lead[]
+  latestLeads Lead[]             @relation("LeadLatestCampaign")
   events      CommunicationEvent[]
+  metaLeads   MetaLead[]
+  touches     LeadCampaignTouch[]
 
   @@index([status])
   @@index([sourceCode])
@@ -845,9 +881,20 @@ model CommunicationEvent {
   sourceCode            String?               @map("source_code")
   campaignName          String?               @map("campaign_name")
   campaignId            String?               @map("campaign_id") @db.Uuid
+  channelCode           String?               @map("channel_code")
   utmSource             String?               @map("utm_source")
   utmMedium             String?               @map("utm_medium")
   utmCampaign           String?               @map("utm_campaign")
+  utmContent            String?               @map("utm_content")
+  utmTerm               String?               @map("utm_term")
+  landingPageUrl        String?               @map("landing_page_url") @db.Text
+  phoneCountryCode      String?               @map("phone_country_code")
+  whatsapp              String?               @map("whatsapp")
+  whatsappSameAsPhone   Boolean?              @map("whatsapp_same_as_phone")
+  currentLocation       String?               @map("current_location")
+  highestQualificationCode String?            @map("highest_qualification_code")
+  preferredIntakeCode   String?               @map("preferred_intake_code")
+  preferredDegreeCode   String?               @map("preferred_degree_code")
   direction             String                @default("incoming")
   externalId            String?               @map("external_id")
   formName              String?               @map("form_name")
@@ -862,6 +909,7 @@ model CommunicationEvent {
   updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at")
   lead                  Lead?                 @relation(fields: [leadId], references: [id], onDelete: SetNull)
   campaign              Campaign?             @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  metaLead              MetaLead?
 
   @@unique([channel, externalId])
   @@index([processingStatus])
@@ -871,5 +919,276 @@ model CommunicationEvent {
   @@index([senderPhoneNormalized])
   @@index([senderEmail])
   @@index([campaignId])
+  @@index([formName])
   @@map("communication_events")
+}
+
+enum MetaPlatform {
+  FACEBOOK
+  INSTAGRAM
+}
+
+enum MetaFormType {
+  STUDY_ABROAD
+  COUNTRY_SPECIFIC
+  SCHOLARSHIP
+  IELTS
+  EVENT
+}
+
+model MetaLead {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform              MetaPlatform
+  formType              MetaFormType        @default(STUDY_ABROAD) @map("form_type")
+  externalId            String?             @map("external_id")
+  fullName              String?             @map("full_name")
+  phone                 String?
+  phoneNormalized       String?             @map("phone_normalized")
+  email                 String?
+  whatsapp              String?
+  currentEducation      String?             @map("current_education")
+  preferredCountryCode  String?             @map("preferred_country_code")
+  preferredIntake       String?             @map("preferred_intake")
+  campaignName          String?             @map("campaign_name")
+  metaCampaignId        String?             @map("meta_campaign_id")
+  adSetName             String?             @map("ad_set_name")
+  adName                String?             @map("ad_name")
+  campaignId            String?             @map("campaign_id") @db.Uuid
+  receivedAt            DateTime            @default(now()) @map("received_at")
+  processingStatus      CommunicationStatus @default(PENDING) @map("processing_status")
+  processingError       String?             @map("processing_error") @db.Text
+  message               String?
+  duplicate             Boolean             @default(false)
+  pooled                Boolean             @default(false)
+  leadId                String?             @map("lead_id") @db.Uuid
+  communicationEventId  String?             @unique @map("communication_event_id") @db.Uuid
+  rawPayload            Json?               @map("raw_payload")
+  createdAt             DateTime            @default(now()) @map("created_at")
+  updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at")
+  lead                  Lead?               @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  campaign              Campaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  communicationEvent    CommunicationEvent? @relation(fields: [communicationEventId], references: [id], onDelete: SetNull)
+  campaignTouch         LeadCampaignTouch?
+
+  @@unique([platform, externalId])
+  @@index([processingStatus])
+  @@index([platform])
+  @@index([formType])
+  @@index([receivedAt])
+  @@index([leadId])
+  @@index([campaignName])
+  @@index([preferredCountryCode])
+  @@map("meta_leads")
+}
+
+/// Append-only campaign attribution. Rows are never deleted.
+model LeadCampaignTouch {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId         String         @map("lead_id") @db.Uuid
+  metaLeadId     String?        @unique @map("meta_lead_id") @db.Uuid
+  platform       MetaPlatform?
+  formType       MetaFormType?  @map("form_type")
+  campaignName   String?        @map("campaign_name")
+  metaCampaignId String?        @map("meta_campaign_id")
+  adSetName      String?        @map("ad_set_name")
+  adName         String?        @map("ad_name")
+  sourceCode     String?        @map("source_code")
+  channelCode    String?        @map("channel_code")
+  campaignId     String?        @map("campaign_id") @db.Uuid
+  externalLeadId String?        @map("external_lead_id")
+  utmSource      String?        @map("utm_source")
+  utmMedium      String?        @map("utm_medium")
+  utmCampaign    String?        @map("utm_campaign")
+  utmContent     String?        @map("utm_content")
+  utmTerm        String?        @map("utm_term")
+  receivedAt     DateTime       @map("received_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  metaLead       MetaLead?      @relation(fields: [metaLeadId], references: [id], onDelete: SetNull)
+  campaign       Campaign?      @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([leadId, receivedAt])
+  @@index([campaignName])
+  @@index([externalLeadId])
+  @@index([campaignId])
+  @@map("lead_campaign_touches")
+}
+
+model LeadAttributionChange {
+  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId        String                @map("lead_id") @db.Uuid
+  kind          AttributionChangeKind
+  previousValue String?               @map("previous_value")
+  nextValue     String?               @map("next_value")
+  reason        String                @db.Text
+  changedById   String?               @map("changed_by_id") @db.Uuid
+  createdAt     DateTime              @default(now()) @map("created_at")
+  lead          Lead                  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  changedBy     User?                 @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([leadId, createdAt])
+  @@map("lead_attribution_changes")
+}
+
+enum WhatsAppConversationStatus {
+  NEW
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_REPLY
+  RESOLVED
+  CLOSED
+}
+
+enum WhatsAppMessageType {
+  TEXT
+  IMAGE
+  PDF
+  DOCUMENT
+  VIDEO
+  VOICE
+  TEMPLATE
+}
+
+model WhatsAppConversation {
+  id                 String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  waNumber           String                     @unique @map("wa_number")
+  contactName        String?                    @map("contact_name")
+  leadId             String?                    @map("lead_id") @db.Uuid
+  assignedUserId     String?                    @map("assigned_user_id") @db.Uuid
+  status             WhatsAppConversationStatus @default(NEW)
+  unreadCount        Int                        @default(0) @map("unread_count")
+  lastMessageAt      DateTime?                  @map("last_message_at")
+  lastMessagePreview String?                    @map("last_message_preview")
+  lastDirection      String?                    @map("last_direction")
+  lastInboundAt      DateTime?                  @map("last_inbound_at")
+  linkingAt          DateTime?                  @map("linking_at")
+  createdAt          DateTime                   @default(now()) @map("created_at")
+  updatedAt          DateTime                   @default(now()) @updatedAt @map("updated_at")
+  lead               Lead?                      @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  assignedUser       User?                      @relation("WhatsAppConversationAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages           WhatsAppMessage[]
+
+  @@index([leadId])
+  @@index([assignedUserId])
+  @@index([status])
+  @@index([lastMessageAt])
+  @@map("whatsapp_conversations")
+}
+
+model WhatsAppMessage {
+  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId       String               @map("conversation_id") @db.Uuid
+  direction            String
+  type                 WhatsAppMessageType  @default(TEXT)
+  body                 String?              @db.Text
+  providerMessageId    String?              @unique @map("provider_message_id")
+  deliveryStatus       String               @default("sent") @map("delivery_status")
+  errorMessage         String?              @map("error_message") @db.Text
+  sentById             String?              @map("sent_by_id") @db.Uuid
+  attachmentUrl        String?              @map("attachment_url") @db.Text
+  attachmentMime       String?              @map("attachment_mime")
+  attachmentName       String?              @map("attachment_name")
+  attachmentSize       Int?                 @map("attachment_size")
+  docCategory          String?              @map("doc_category")
+  communicationEventId String?              @map("communication_event_id") @db.Uuid
+  sentAt               DateTime             @default(now()) @map("sent_at")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  conversation         WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+  sentBy               User?                @relation("WhatsAppMessageSender", fields: [sentById], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, sentAt])
+  @@map("whatsapp_messages")
+}
+
+enum EmailThreadStatus {
+  NEW
+  ASSIGNED
+  PROCESSING
+  REPLIED
+  WAITING_REPLY
+  CLOSED
+}
+
+model EmailThread {
+  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  participantEmail       String            @unique @map("participant_email")
+  contactName            String?           @map("contact_name")
+  subject                String?
+  leadId                 String?           @map("lead_id") @db.Uuid
+  assignedUserId         String?           @map("assigned_user_id") @db.Uuid
+  status                 EmailThreadStatus @default(NEW)
+  unreadCount            Int               @default(0) @map("unread_count")
+  lastMessageAt          DateTime?         @map("last_message_at")
+  lastMessagePreview     String?           @map("last_message_preview") @db.Text
+  lastDirection          String?           @map("last_direction")
+  lastInboundMessageId   String?           @map("last_inbound_message_id")
+  linkingAt              DateTime?         @map("linking_at")
+  createdAt              DateTime          @default(now()) @map("created_at")
+  updatedAt              DateTime          @default(now()) @updatedAt @map("updated_at")
+  lead                   Lead?             @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  assignedUser           User?             @relation("EmailThreadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages               EmailMessage[]
+
+  @@index([leadId])
+  @@index([assignedUserId])
+  @@index([status])
+  @@index([lastMessageAt])
+  @@map("email_threads")
+}
+
+model EmailMessage {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  threadId             String            @map("thread_id") @db.Uuid
+  direction            String
+  subject              String
+  bodyText             String?           @map("body_text") @db.Text
+  fromEmail            String            @map("from_email")
+  fromName             String?           @map("from_name")
+  toEmail              String            @map("to_email")
+  providerMessageId    String?           @unique @map("provider_message_id")
+  inReplyTo            String?           @map("in_reply_to")
+  referencesHeader     String?           @map("references_header") @db.Text
+  deliveryStatus       String            @default("sent") @map("delivery_status")
+  errorMessage         String?           @map("error_message") @db.Text
+  sentById             String?           @map("sent_by_id") @db.Uuid
+  templateCode         String?           @map("template_code")
+  communicationEventId String?           @map("communication_event_id") @db.Uuid
+  sentAt               DateTime          @default(now()) @map("sent_at")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  thread               EmailThread       @relation(fields: [threadId], references: [id], onDelete: Restrict)
+  sentBy               User?             @relation("EmailMessageSender", fields: [sentById], references: [id], onDelete: SetNull)
+  attachments          EmailAttachment[]
+
+  @@index([threadId, sentAt])
+  @@map("email_messages")
+}
+
+model EmailAttachment {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId   String       @map("message_id") @db.Uuid
+  fileName    String       @map("file_name")
+  mimeType    String       @map("mime_type")
+  url         String       @db.Text
+  fileSize    Int?         @map("file_size")
+  docCategory String?      @map("doc_category")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  message     EmailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("email_attachments")
+}
+
+model EmailTemplate {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code      String   @unique
+  name      String
+  subject   String
+  body      String   @db.Text
+  isActive  Boolean  @default(true) @map("is_active")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([isActive, sortOrder])
+  @@map("email_templates")
 }

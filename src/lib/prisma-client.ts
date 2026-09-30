@@ -10,4 +10,9 @@ export type {
   CommunicationChannel,
   CommunicationStatus,
   CampaignStatus,
+  MetaPlatform,
+  MetaFormType,
+  WhatsAppConversationStatus,
+  WhatsAppMessageType,
+  EmailThreadStatus,
 } from '../../generated/prisma/index'
