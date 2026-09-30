@@ -1,19 +1,19 @@
 import { Server } from 'http'
 import app from './app'
 import { config } from './config'
-import { startOverdueFollowUpJob } from './jobs/overdue-follow-ups'
+import { startFollowUpJobs } from './jobs/follow-up-jobs'
 import { prisma } from './lib/prisma'
 
 const PORT = config.port
 let server: Server | undefined
-let overdueJobTimer: ReturnType<typeof setInterval> | undefined
+let followUpJobTimer: ReturnType<typeof setInterval> | undefined
 
 const gracefulShutdown = (signal: string) => {
   console.log(`\n🛑 ${signal} received. Starting graceful shutdown...`)
 
-  if (overdueJobTimer) {
-    clearInterval(overdueJobTimer)
-    overdueJobTimer = undefined
+  if (followUpJobTimer) {
+    clearInterval(followUpJobTimer)
+    followUpJobTimer = undefined
   }
 
   if (server) {
@@ -69,8 +69,8 @@ async function bootstrap() {
       console.log(`🌍 Environment: ${config.env}`)
       console.log(`🔗 Health check: http://localhost:${PORT}/api/health`)
       console.log('─'.repeat(60))
-      overdueJobTimer = startOverdueFollowUpJob()
-      console.log('⏱️  Overdue follow-up sync job started (every 5 min)')
+      followUpJobTimer = startFollowUpJobs()
+      console.log('⏱️  Follow-up jobs started (overdue + reminders, every 2 min)')
     })
   } catch (error) {
     console.error('❌ Failed to start server:', error)

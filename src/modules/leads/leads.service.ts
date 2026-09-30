@@ -34,12 +34,18 @@ import {
   titleCaseName,
 } from './leads.helpers'
 import {
+  CLOSE_MESSAGES,
   PIPELINE_STATUSES,
+  REOPEN_MESSAGES,
   STATUS_MESSAGES,
   describeStatusChange,
+  isCloseBlockedBehavior,
+  isOtherReasonCode,
+  isProcessGatedBehavior,
+  isTerminalBehavior,
   lostReasonRequiredFor,
   missingQualifiedData,
-  remarksRequiredFor,
+  reasonCategoryFor,
   resolveLeadStatus,
   type LeadStatusItem,
 } from './lead-status'
@@ -124,6 +130,7 @@ function serializeLead(lead: LeadRecord) {
     sourceCode: lead.sourceCode,
     sourceLocked: lead.sourceLocked,
     campaign: lead.campaign,
+    campaignId: lead.campaignId,
     utmSource: lead.utmSource,
     utmMedium: lead.utmMedium,
     utmCampaign: lead.utmCampaign,
@@ -132,6 +139,7 @@ function serializeLead(lead: LeadRecord) {
     status: lead.status,
     statusCode: lead.statusCode,
     lostReasonCode: lead.lostReasonCode,
+    closeReasonCode: lead.closeReasonCode,
     academicFitCode: lead.academicFitCode,
     englishReadinessCode: lead.englishReadinessCode,
     countryIntakeFitCode: lead.countryIntakeFitCode,
@@ -585,6 +593,8 @@ export async function getLead(auth: AuthContext, id: string) {
         items: statusItems,
         canUpdate: hasPermission(auth.permissions, 'lead:update_status'),
         canOverride: hasPermission(auth.permissions, 'lead:override_status'),
+        canClose: hasPermission(auth.permissions, 'lead:close'),
+        canReopen: hasPermission(auth.permissions, 'lead:reopen'),
       }),
       nextFollowUp: nextFollowUp
         ? {
@@ -955,18 +965,6 @@ export async function updateLeadStatus(auth: AuthContext, id: string, body: Reco
   if (remarks.length > 1000) {
     fields.remarks = 'Remarks cannot exceed 1000 characters.'
   }
-  if (remarksRequiredFor(next.behaviorKey) && !remarks) {
-    fields.remarks = STATUS_MESSAGES.remarks
-  }
-
-  let lostReasonCode: string | null = null
-  if (lostReasonRequiredFor(next.behaviorKey)) {
-    const reason = await resolveMasterCode('LEAD_LOST_REASON', body.lostReasonCode, 'lostReasonCode', fields, {
-      required: true,
-      message: 'Please select a lost reason.',
-    })
-    lostReasonCode = reason?.code || null
-  }
 
   if (next.code === 'QUALIFIED' && missingQualifiedData(currentLead)) {
     fields.statusCode = STATUS_MESSAGES.qualifiedData
@@ -980,7 +978,6 @@ export async function updateLeadStatus(auth: AuthContext, id: string, body: Reco
         data: {
           status: next.name,
           statusCode: next.code,
-          lostReasonCode,
           updatedById: auth.user.id,
         },
         include: leadInclude,
@@ -993,7 +990,6 @@ export async function updateLeadStatus(auth: AuthContext, id: string, body: Reco
           newStatus: next.name,
           newStatusCode: next.code!,
           remarks: remarks || null,
-          lostReasonCode,
           isOverride: Boolean(option.requiresOverride),
           overrideReason: option.requiresOverride ? overrideReason : null,
           createdById: auth.user.id,
@@ -1014,7 +1010,6 @@ export async function updateLeadStatus(auth: AuthContext, id: string, body: Reco
             newStatus: next.name,
             newStatusCode: next.code,
             remarks: remarks || null,
-            lostReasonCode,
             isOverride: option.requiresOverride,
           },
           ipAddress: meta.ipAddress,
@@ -1037,7 +1032,6 @@ export async function updateLeadStatus(auth: AuthContext, id: string, body: Reco
         previousStatusCode: current!.code,
         newStatusCode: next.code,
         remarks: remarks || null,
-        lostReasonCode,
         override: option.requiresOverride,
         overrideReason: option.requiresOverride ? overrideReason : null,
         relatedName: lead.name,
@@ -1053,6 +1047,353 @@ export async function updateLeadStatus(auth: AuthContext, id: string, body: Reco
   }
 }
 
+export async function closeLead(auth: AuthContext, id: string, body: Record<string, unknown>, meta: AuditMeta) {
+  if (!hasPermission(auth.permissions, 'lead:close')) {
+    throw httpError.accessDenied(CLOSE_MESSAGES.permission)
+  }
+
+  const currentLead = await assertCanViewLead(auth, id)
+  const items = await loadLeadStatusItems()
+  const current = resolveLeadStatus(currentLead, items)
+  if (!current) {
+    throw httpError.validation({ statusCode: CLOSE_MESSAGES.status }, CLOSE_MESSAGES.status)
+  }
+  if (isCloseBlockedBehavior(current.behaviorKey)) {
+    throw httpError.validation({ statusCode: STATUS_MESSAGES.lockedConverted }, STATUS_MESSAGES.lockedConverted)
+  }
+  if (isTerminalBehavior(current.behaviorKey)) {
+    throw httpError.validation({ statusCode: CLOSE_MESSAGES.notAllowed }, CLOSE_MESSAGES.notAllowed)
+  }
+
+  const fields: Record<string, string> = {}
+  const statusCode = asString(body.statusCode)
+  if (!statusCode) fields.statusCode = CLOSE_MESSAGES.status
+
+  const next = items.find((item) => item.code === statusCode && item.status === 'ACTIVE')
+  if (!next?.code || !isTerminalBehavior(next.behaviorKey)) {
+    fields.statusCode = CLOSE_MESSAGES.status
+  }
+  throwIfInvalid(fields)
+
+  const remarks = asString(body.remarks)
+  if (remarks.length > 1000) {
+    fields.remarks = 'Remarks cannot exceed 1000 characters.'
+  }
+
+  let lostReasonCode: string | null = null
+  let closeReasonCode: string | null = null
+  const reasonCategory = reasonCategoryFor(next!.behaviorKey)
+  const reasonValue = body.reasonCode ?? body.lostReasonCode ?? body.closeReasonCode
+
+  if (reasonCategory) {
+    const reason = await resolveMasterCode(reasonCategory, reasonValue, 'reasonCode', fields, {
+      required: true,
+      message: CLOSE_MESSAGES.reason,
+    })
+    if (lostReasonRequiredFor(next!.behaviorKey)) {
+      lostReasonCode = reason?.code || null
+    } else {
+      closeReasonCode = reason?.code || null
+    }
+    if (isOtherReasonCode(reason?.code) && !remarks) {
+      fields.remarks = CLOSE_MESSAGES.remarksOther
+    }
+  }
+
+  throwIfInvalid(fields)
+
+  try {
+    const lead = await prisma.$transaction(async (tx) => {
+      const updated = await tx.lead.update({
+        where: { id },
+        data: {
+          status: next!.name,
+          statusCode: next!.code,
+          lostReasonCode,
+          closeReasonCode,
+          updatedById: auth.user.id,
+        },
+        include: leadInclude,
+      })
+      await tx.leadStatusHistory.create({
+        data: {
+          leadId: id,
+          previousStatus: current.name,
+          previousStatusCode: current.code,
+          newStatus: next!.name,
+          newStatusCode: next!.code!,
+          remarks: remarks || null,
+          lostReasonCode,
+          closeReasonCode,
+          createdById: auth.user.id,
+        },
+      })
+      const reasonLabel = lostReasonCode || closeReasonCode
+      await tx.activity.create({
+        data: {
+          type: 'NOTE',
+          userId: auth.user.id,
+          notes: `Lead closed as ${next!.name}${reasonLabel ? ` (${reasonLabel})` : ''}${remarks ? `. ${remarks}` : ''}`,
+          relatedName: updated.name,
+          relatedType: 'lead',
+          relatedId: updated.id,
+          outcome: next!.name,
+          metadata: {
+            action: 'close',
+            previousStatus: current.name,
+            previousStatusCode: current.code,
+            newStatus: next!.name,
+            newStatusCode: next!.code,
+            remarks: remarks || null,
+            lostReasonCode,
+            closeReasonCode,
+          },
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+        },
+      })
+      return updated
+    })
+
+    await writeAuditLog({
+      userId: auth.user.id,
+      action: 'LEAD_CLOSED',
+      entityType: 'lead',
+      entityId: lead.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: {
+        from: current.name,
+        to: next!.name,
+        previousStatusCode: current.code,
+        newStatusCode: next!.code,
+        remarks: remarks || null,
+        lostReasonCode,
+        closeReasonCode,
+        relatedName: lead.name,
+        name: lead.name,
+      },
+    })
+
+    return getLead(auth, id)
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    console.error(error)
+    throw httpError.badRequest(CLOSE_MESSAGES.failed, 'LEAD_CLOSE_FAILED')
+  }
+}
+
+async function resolveReopenTargetStatus(leadId: string, items: LeadStatusItem[]) {
+  const history = await prisma.leadStatusHistory.findMany({
+    where: { leadId },
+    orderBy: { createdAt: 'desc' },
+    take: 50,
+  })
+
+  for (const row of history) {
+    const previous = resolveLeadStatus(
+      { status: row.previousStatus || '', statusCode: row.previousStatusCode },
+      items,
+    )
+    if (
+      previous?.code &&
+      !isTerminalBehavior(previous.behaviorKey) &&
+      !isCloseBlockedBehavior(previous.behaviorKey) &&
+      !isProcessGatedBehavior(previous.behaviorKey)
+    ) {
+      const active = items.find((item) => item.code === previous.code && item.status === 'ACTIVE')
+      if (active?.code) return active
+    }
+  }
+
+  const contacted = items.find((item) => item.code === 'CONTACTED' && item.status === 'ACTIVE')
+  if (contacted) return contacted
+  const neu = items.find((item) => item.code === 'NEW' && item.status === 'ACTIVE')
+  if (neu) return neu
+  return null
+}
+
+export async function reopenLead(auth: AuthContext, id: string, body: Record<string, unknown>, meta: AuditMeta) {
+  if (!hasPermission(auth.permissions, 'lead:reopen')) {
+    throw httpError.accessDenied(REOPEN_MESSAGES.permission)
+  }
+
+  const currentLead = await assertCanViewLead(auth, id)
+  const items = await loadLeadStatusItems()
+  const current = resolveLeadStatus(currentLead, items)
+  if (!current || !isTerminalBehavior(current.behaviorKey)) {
+    throw httpError.validation({ statusCode: REOPEN_MESSAGES.notTerminal }, REOPEN_MESSAGES.notTerminal)
+  }
+  if (isCloseBlockedBehavior(current.behaviorKey)) {
+    throw httpError.validation({ statusCode: REOPEN_MESSAGES.notAllowed }, REOPEN_MESSAGES.notAllowed)
+  }
+
+  const fields: Record<string, string> = {}
+  const reopenReason = asString(body.reopenReason)
+  if (!reopenReason) fields.reopenReason = REOPEN_MESSAGES.reason
+  if (reopenReason.length > 1000) fields.reopenReason = 'Reopen reason cannot exceed 1000 characters.'
+
+  const followUpRaw = asString(body.followUpDate || body.dueAt)
+  let followUpDate: Date | null = null
+  if (!followUpRaw) {
+    fields.followUpDate = REOPEN_MESSAGES.followUp
+  } else {
+    const parsed = new Date(followUpRaw)
+    if (Number.isNaN(parsed.getTime())) {
+      fields.followUpDate = REOPEN_MESSAGES.followUp
+    } else {
+      followUpDate = parsed
+    }
+  }
+
+  const ownerId = asString(body.ownerId)
+  if (!ownerId) fields.ownerId = REOPEN_MESSAGES.owner
+  throwIfInvalid(fields)
+
+  const assignee = await prisma.user.findFirst({
+    where: {
+      id: ownerId,
+      status: 'ACTIVE',
+      AND: [assigneeVisibilityWhere(auth)],
+    },
+    include: { team: { select: { id: true, name: true } } },
+  })
+  if (!assignee) {
+    throw httpError.validation({ ownerId: REOPEN_MESSAGES.owner }, REOPEN_MESSAGES.owner)
+  }
+
+  const next = await resolveReopenTargetStatus(id, items)
+  if (!next?.code) {
+    throw httpError.badRequest(REOPEN_MESSAGES.failed, 'LEAD_REOPEN_FAILED')
+  }
+
+  const fromOwnerId = currentLead.ownerId
+  const fromOwnerName = currentLead.ownerName
+  const teamId = assignee.teamId || currentLead.assignedCountryTeamId
+  const ownerChanged = assignee.id !== currentLead.ownerId
+
+  try {
+    const lead = await prisma.$transaction(async (tx) => {
+      const updated = await tx.lead.update({
+        where: { id },
+        data: {
+          status: next.name,
+          statusCode: next.code,
+          lostReasonCode: null,
+          closeReasonCode: null,
+          ownerId: assignee.id,
+          ownerName: assignee.fullName,
+          assignedCountryTeamId: teamId,
+          updatedById: auth.user.id,
+        },
+        include: leadInclude,
+      })
+
+      if (ownerChanged) {
+        await tx.leadAssignment.create({
+          data: {
+            leadId: id,
+            fromOwnerId,
+            toOwnerId: assignee.id,
+            teamId,
+            reason: `Reopened — ${reopenReason}`.slice(0, 400),
+            createdById: auth.user.id,
+          },
+        })
+      }
+
+      await tx.leadStatusHistory.create({
+        data: {
+          leadId: id,
+          previousStatus: current.name,
+          previousStatusCode: current.code,
+          newStatus: next.name,
+          newStatusCode: next.code!,
+          remarks: reopenReason,
+          createdById: auth.user.id,
+        },
+      })
+
+      await tx.activity.create({
+        data: {
+          type: 'NOTE',
+          userId: auth.user.id,
+          notes: `Lead reopened from ${current.name} to ${next.name}. ${reopenReason}`,
+          relatedName: updated.name,
+          relatedType: 'lead',
+          relatedId: updated.id,
+          outcome: 'Reopened',
+          metadata: {
+            action: 'reopen',
+            previousStatus: current.name,
+            previousStatusCode: current.code,
+            newStatus: next.name,
+            newStatusCode: next.code,
+            reopenReason,
+            followUpDate: followUpDate!.toISOString(),
+            ownerId: assignee.id,
+            ownerName: assignee.fullName,
+          },
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+        },
+      })
+
+      return updated
+    })
+
+    try {
+      const { createSystemFollowUp } = await import('../follow-ups/system-follow-up')
+      await createSystemFollowUp({
+        leadId: lead.id,
+        contactName: lead.name,
+        type: 'Call',
+        purpose: 'Reopened Lead Follow-up',
+        nextAction: 'Contact reopened lead',
+        dueAt: followUpDate!,
+        priority: lead.priority || 'Medium',
+        ownerId: assignee.id,
+        ownerName: assignee.fullName,
+        notes: reopenReason,
+        reason: `Lead Reopened — ${lead.id.slice(0, 8)} — ${followUpDate!.toISOString()}`,
+        actorUserId: auth.user.id,
+        meta,
+      })
+    } catch (error) {
+      console.error('[follow-ups] Follow-up on reopen failed:', error)
+    }
+
+    await writeAuditLog({
+      userId: auth.user.id,
+      action: 'LEAD_REOPENED',
+      entityType: 'lead',
+      entityId: lead.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: {
+        from: current.name,
+        to: next.name,
+        previousStatusCode: current.code,
+        newStatusCode: next.code,
+        reopenReason,
+        followUpDate: followUpDate!.toISOString(),
+        fromOwnerId,
+        fromOwnerName,
+        toOwnerId: assignee.id,
+        toOwnerName: assignee.fullName,
+        relatedName: lead.name,
+        name: lead.name,
+      },
+    })
+
+    return getLead(auth, id)
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+    console.error(error)
+    throw httpError.badRequest(REOPEN_MESSAGES.failed, 'LEAD_REOPEN_FAILED')
+  }
+}
+
 export async function listLeadStatusHistory(auth: AuthContext, id: string) {
   await assertCanViewLead(auth, id)
   const rows = await prisma.leadStatusHistory.findMany({
@@ -1060,14 +1401,24 @@ export async function listLeadStatusHistory(auth: AuthContext, id: string) {
     include: { createdBy: { select: { id: true, fullName: true } } },
     orderBy: { createdAt: 'desc' },
   })
-  const reasonCodes = [...new Set(rows.map((row) => row.lostReasonCode).filter((code): code is string => Boolean(code)))]
-  const reasons = reasonCodes.length
-    ? await prisma.masterDataItem.findMany({
-        where: { categoryKey: 'LEAD_LOST_REASON', code: { in: reasonCodes } },
-        select: { code: true, name: true },
-      })
-    : []
-  const reasonMap = new Map(reasons.map((item) => [item.code, item.name]))
+  const lostCodes = [...new Set(rows.map((row) => row.lostReasonCode).filter((code): code is string => Boolean(code)))]
+  const closeCodes = [...new Set(rows.map((row) => row.closeReasonCode).filter((code): code is string => Boolean(code)))]
+  const [lostReasons, closeReasons] = await Promise.all([
+    lostCodes.length
+      ? prisma.masterDataItem.findMany({
+          where: { categoryKey: 'LEAD_LOST_REASON', code: { in: lostCodes } },
+          select: { code: true, name: true },
+        })
+      : Promise.resolve([]),
+    closeCodes.length
+      ? prisma.masterDataItem.findMany({
+          where: { categoryKey: 'LEAD_CLOSE_REASON', code: { in: closeCodes } },
+          select: { code: true, name: true },
+        })
+      : Promise.resolve([]),
+  ])
+  const lostMap = new Map(lostReasons.map((item) => [item.code, item.name]))
+  const closeMap = new Map(closeReasons.map((item) => [item.code, item.name]))
 
   return {
     items: rows.map((row) => ({
@@ -1078,7 +1429,9 @@ export async function listLeadStatusHistory(auth: AuthContext, id: string) {
       newStatusCode: row.newStatusCode,
       remarks: row.remarks,
       lostReasonCode: row.lostReasonCode,
-      lostReason: row.lostReasonCode ? reasonMap.get(row.lostReasonCode) || row.lostReasonCode : null,
+      lostReason: row.lostReasonCode ? lostMap.get(row.lostReasonCode) || row.lostReasonCode : null,
+      closeReasonCode: row.closeReasonCode,
+      closeReason: row.closeReasonCode ? closeMap.get(row.closeReasonCode) || row.closeReasonCode : null,
       isOverride: row.isOverride,
       overrideReason: row.overrideReason,
       updatedBy: row.createdBy ? { id: row.createdBy.id, name: row.createdBy.fullName } : null,
@@ -1404,7 +1757,7 @@ export async function listLeadPool(
 }
 
 export async function listLeadAssignees(auth: AuthContext, query: { teamId?: string; search?: string }) {
-  if (!hasPermission(auth.permissions, ['lead:assign', 'lead:reassign'])) {
+  if (!hasPermission(auth.permissions, ['lead:assign', 'lead:reassign', 'lead:reopen'])) {
     throw httpError.accessDenied()
   }
 
@@ -1538,6 +1891,37 @@ export async function assignLead(auth: AuthContext, id: string, body: Record<str
         name: lead.name,
       },
     })
+
+    // Auto first follow-up on assignment (CRM-005 Rule-18)
+    try {
+      const { createSystemFollowUp, daysFromNow } = await import('../follow-ups/system-follow-up')
+      await createSystemFollowUp({
+        leadId: lead.id,
+        contactName: lead.name,
+        type: 'Call',
+        purpose: 'Initial Contact',
+        nextAction: 'Make first contact call',
+        dueAt: daysFromNow(1),
+        priority: lead.priority || 'Medium',
+        ownerId: assignee.id,
+        ownerName: assignee.fullName,
+        reason: isUnassigned ? 'Lead Assigned — First Follow-up' : 'Lead Reassigned — First Follow-up',
+        actorUserId: auth.user.id,
+        meta,
+      })
+      const { createNotification } = await import('../notifications/notifications.service')
+      await createNotification({
+        userId: assignee.id,
+        title: isUnassigned ? 'New Lead Assigned' : 'Lead Reassigned to You',
+        body: `${lead.code} — ${lead.name} is now assigned to you.`,
+        link: `/leads/${lead.id}`,
+        type: 'lead_assigned',
+        leadId: lead.id,
+        dedupeKey: `lead-assigned:${lead.id}:${assignee.id}:${Date.now()}`,
+      })
+    } catch (error) {
+      console.error('[follow-ups] Auto follow-up on assign failed:', error)
+    }
 
     return { lead: serializeLead(lead), message: isUnassigned ? 'Lead assigned successfully.' : 'Lead reassigned successfully.' }
   } catch (error) {

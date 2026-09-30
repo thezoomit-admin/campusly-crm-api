@@ -7,4 +7,7 @@ export type {
   Gender,
   MaritalStatus,
   EmployeeDocumentType,
+  CommunicationChannel,
+  CommunicationStatus,
+  CampaignStatus,
 } from '../../generated/prisma/index'

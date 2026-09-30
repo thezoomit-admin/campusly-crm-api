@@ -19,6 +19,21 @@ pipelineRouter.get('/dashboard', async (req, res, next) => {
   }
 })
 
+pipelineRouter.get('/follow-up-performance', requirePermission('follow_up:view'), async (req, res, next) => {
+  try {
+    const { getFollowUpPerformance } = await import('./follow-up-performance.service')
+    res.json(
+      await getFollowUpPerformance(req.auth!, {
+        from: queryString(req.query.from),
+        to: queryString(req.query.to),
+        ownerId: queryString(req.query.ownerId),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
 function queryString(value: unknown) {
   return typeof value === 'string' ? value.trim() : undefined
 }

@@ -360,6 +360,14 @@ async function upsertMasterDataSeeds() {
       },
     })
   }
+
+  for (const categoryKey of ['LEAD_LOST_REASON', 'LEAD_CLOSE_REASON'] as const) {
+    const keep = new Set(MASTER_DATA_SEEDS.filter((item) => item.categoryKey === categoryKey).map((item) => item.code))
+    await prisma.masterDataItem.updateMany({
+      where: { categoryKey, code: { notIn: [...keep] }, status: 'ACTIVE' },
+      data: { status: 'INACTIVE' },
+    })
+  }
 }
 
 async function upsertUserWithEmployee(input: {
@@ -625,6 +633,60 @@ async function seedAuditLogs(adminUserId: string, actorIds: string[]) {
   ]
 
   await prisma.auditLog.createMany({ data: rows })
+}
+
+async function seedCampaigns(adminId: string) {
+  const existing = await prisma.campaign.count()
+  if (existing > 0) return
+
+  const campaigns = [
+    {
+      code: 'CMP-0001',
+      name: 'Spring Intake Meta Ads',
+      description: 'Facebook & Instagram lead forms for Spring intake.',
+      sourceCode: 'META',
+      channel: 'Meta',
+      status: 'ACTIVE' as const,
+      utmSource: 'meta',
+      utmMedium: 'cpc',
+      utmCampaign: 'spring_intake',
+      budget: 50000,
+    },
+    {
+      code: 'CMP-0002',
+      name: 'Website Apply Now',
+      description: 'Organic website Apply Now / Contact forms.',
+      sourceCode: 'WEBSITE',
+      channel: 'Website',
+      status: 'ACTIVE' as const,
+      utmSource: 'website',
+      utmMedium: 'organic',
+      utmCampaign: 'apply_now',
+      budget: null,
+    },
+    {
+      code: 'CMP-0003',
+      name: 'WhatsApp Enquiry Drive',
+      description: 'Inbound WhatsApp Business enquiries.',
+      sourceCode: 'WHATSAPP',
+      channel: 'WhatsApp',
+      status: 'ACTIVE' as const,
+      utmSource: 'whatsapp',
+      utmMedium: 'chat',
+      utmCampaign: 'wa_enquiry',
+      budget: 10000,
+    },
+  ]
+
+  for (const campaign of campaigns) {
+    await prisma.campaign.create({
+      data: {
+        ...campaign,
+        createdById: adminId,
+        updatedById: adminId,
+      },
+    })
+  }
 }
 
 async function seedPipelineDemo(userIds: string[]) {
@@ -961,6 +1023,7 @@ async function main() {
   await seedActivities(seededUserIds)
   await seedAuditLogs(admin.id, seededUserIds)
   await seedPipelineDemo(seededUserIds)
+  await seedCampaigns(admin.id)
 
   const permissionCount = await prisma.rolePermission.count({ where: { roleId: adminRole.id } })
   console.log(`Seeded root administrator ${admin.email} (${admin.username})`)

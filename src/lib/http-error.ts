@@ -84,6 +84,9 @@ export const httpError = {
   badRequest(message: string, code = 'INVALID_INPUT') {
     return new HttpError(400, message, code)
   },
+  conflict(message: string, code = 'CONFLICT') {
+    return new HttpError(409, message, code)
+  },
   masterDataForbidden() {
     return new HttpError(403, 'You are not authorized to manage master data.', 'MASTER_DATA_FORBIDDEN')
   },
