@@ -221,7 +221,7 @@ function auditDetails(action: string, entityType: string | null, entityId: strin
 }
 
 function skipAuditAction(action: string) {
-  return action.startsWith('ACTIVITY_') || action === 'LEAD_STATUS_CHANGED'
+  return action.startsWith('ACTIVITY_') || action === 'LEAD_STATUS_CHANGED' || action === 'LEAD_CLOSED' || action === 'LEAD_REOPENED'
 }
 
 function inRange(date: Date, from?: Date, to?: Date) {
@@ -533,6 +533,9 @@ export async function createActivity(
   if (createNext && nextDate && input.relatedId) {
     const lead = await prisma.lead.findUnique({ where: { id: input.relatedId } })
     if (lead) {
+      const { computeReminderAt } = await import('../follow-ups/follow-ups.utils')
+      const reminder = '30 Minutes Before'
+      const reminderAt = computeReminderAt(nextDate, reminder)
       const followUp = await prisma.followUp.create({
         data: {
           leadId: lead.id,
@@ -544,7 +547,9 @@ export async function createActivity(
           purpose: type === 'COUNSELLING' ? 'Counselling' : 'Information Sharing',
           notes: input.notes?.trim() || null,
           nextAction,
-          reminder: '30 Minutes Before',
+          reminder,
+          reminderAt,
+          reminderStatus: reminderAt ? 'Pending' : 'Skipped',
           ownerId: lead.ownerId || auth.user.id,
           ownerName: lead.ownerName || auth.user.fullName,
           source: 'Manual',
@@ -561,6 +566,36 @@ export async function createActivity(
         userAgent: meta.userAgent,
         metadata: { followUpId: followUp.id, fromActivityId: row.id, type: followUp.type },
       })
+    }
+  } else if (
+    type === 'COUNSELLING' &&
+    (outcome || '').toLowerCase() === 'completed' &&
+    input.relatedType === 'lead' &&
+    input.relatedId
+  ) {
+    // Auto follow-up after counselling completed (CRM-005 Rule-18)
+    try {
+      const lead = await prisma.lead.findUnique({ where: { id: input.relatedId } })
+      if (lead) {
+        const { createSystemFollowUp, daysFromNow } = await import('../follow-ups/system-follow-up')
+        const result = await createSystemFollowUp({
+          leadId: lead.id,
+          contactName: lead.name,
+          type: 'Call',
+          purpose: 'Service Discussion',
+          nextAction: nextAction || 'Discuss next steps after counselling',
+          dueAt: nextDate && !Number.isNaN(nextDate.getTime()) ? nextDate : daysFromNow(1),
+          priority: lead.priority || 'High',
+          ownerId: lead.ownerId || auth.user.id,
+          ownerName: lead.ownerName || auth.user.fullName,
+          reason: 'Counselling Completed — Next Action Required',
+          actorUserId: auth.user.id,
+          meta,
+        })
+        if (result.created) nextFollowUp = { id: result.followUp.id }
+      }
+    } catch (error) {
+      console.error('[follow-ups] Auto follow-up after counselling failed:', error)
     }
   }
 

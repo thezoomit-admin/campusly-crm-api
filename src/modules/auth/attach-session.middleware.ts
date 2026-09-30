@@ -11,8 +11,13 @@ const SKIP_SESSION_PATHS = new Set([
   '/api/health',
 ])
 
+function shouldSkipSession(path: string) {
+  if (SKIP_SESSION_PATHS.has(path)) return true
+  return path.startsWith('/api/webhooks/')
+}
+
 export async function attachSession(req: Request, _res: Response, next: NextFunction) {
-  if (SKIP_SESSION_PATHS.has(req.path)) {
+  if (shouldSkipSession(req.path)) {
     next()
     return
   }

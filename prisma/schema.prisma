@@ -155,6 +155,9 @@ model User {
   counselledStudents  Student[]              @relation("StudentCounsellor")
   uploadedDocuments   CrmDocument[]          @relation("DocumentUploader")
   ownedFollowUps      FollowUp[]             @relation("FollowUpOwner")
+  notifications       Notification[]         @relation("NotificationRecipient")
+  campaignsCreated    Campaign[]             @relation("CampaignCreatedBy")
+  campaignsUpdated    Campaign[]             @relation("CampaignUpdatedBy")
 
   @@index([primaryRoleId])
   @@index([departmentId])
@@ -507,6 +510,7 @@ model Lead {
   sourceCode     String?  @map("source_code")
   sourceLocked   Boolean  @default(false) @map("source_locked")
   campaign       String?
+  campaignId     String?  @map("campaign_id") @db.Uuid
   utmSource      String?  @map("utm_source")
   utmMedium      String?  @map("utm_medium")
   utmCampaign    String?  @map("utm_campaign")
@@ -519,6 +523,7 @@ model Lead {
   status                String  @default("New")
   statusCode            String? @map("status_code")
   lostReasonCode        String? @map("lost_reason_code")
+  closeReasonCode       String? @map("close_reason_code")
 
   academicFitCode            String? @map("academic_fit_code")
   englishReadinessCode       String? @map("english_readiness_code")
@@ -544,10 +549,13 @@ model Lead {
   assignedCountryTeam Team?  @relation("LeadCountryTeam", fields: [assignedCountryTeamId], references: [id], onDelete: SetNull)
   createdBy           User?  @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy           User?  @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  marketingCampaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   assignments         LeadAssignment[]
   qualificationHistory LeadQualificationHistory[]
   statusHistory       LeadStatusHistory[]
   followUps           FollowUp[]
+  notifications       Notification[]
+  communicationEvents CommunicationEvent[]
 
   @@index([status])
   @@index([ownerId])
@@ -555,6 +563,7 @@ model Lead {
   @@index([phoneNormalized])
   @@index([preferredCountryCode])
   @@index([sourceCode])
+  @@index([campaignId])
   @@map("leads")
 }
 
@@ -616,6 +625,7 @@ model LeadStatusHistory {
   newStatusCode      String   @map("new_status_code")
   remarks            String?  @db.Text
   lostReasonCode     String?  @map("lost_reason_code")
+  closeReasonCode    String?  @map("close_reason_code")
   overrideReason     String?  @map("override_reason")
   isOverride         Boolean  @default(false) @map("is_override")
   createdById        String?  @map("created_by_id") @db.Uuid
@@ -715,6 +725,8 @@ model FollowUp {
   notes            String?   @db.Text
   nextAction       String?   @map("next_action") @db.Text
   reminder         String?
+  reminderAt       DateTime? @map("reminder_at")
+  reminderStatus   String?   @default("Pending") @map("reminder_status")
   outcome          String?
   completedAt      DateTime? @map("completed_at")
   completedById    String?   @map("completed_by_id") @db.Uuid
@@ -730,10 +742,134 @@ model FollowUp {
   updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
   owner            User?     @relation("FollowUpOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   lead             Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  notifications    Notification[]
 
   @@index([status])
   @@index([ownerId])
   @@index([dueAt])
   @@index([leadId])
+  @@index([reminderAt])
+  @@index([reminderStatus])
   @@map("follow_ups")
+}
+
+model Notification {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  title       String
+  body        String?   @db.Text
+  link        String?
+  channel     String    @default("in_app")
+  status      String    @default("Unread")
+  type        String?
+  dedupeKey   String?   @unique @map("dedupe_key")
+  leadId      String?   @map("lead_id") @db.Uuid
+  followUpId  String?   @map("follow_up_id") @db.Uuid
+  expiresAt   DateTime? @map("expires_at")
+  readAt      DateTime? @map("read_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+  user        User      @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  lead        Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  followUp    FollowUp? @relation(fields: [followUpId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+enum CommunicationChannel {
+  WEBSITE
+  WHATSAPP
+  EMAIL
+  META_FACEBOOK
+  META_INSTAGRAM
+}
+
+enum CommunicationStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+  DUPLICATE
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+model Campaign {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String         @unique
+  name        String
+  description String?        @db.Text
+  sourceCode  String?        @map("source_code")
+  channel     String?
+  status      CampaignStatus @default(DRAFT)
+  startDate   DateTime?      @map("start_date") @db.Date
+  endDate     DateTime?      @map("end_date") @db.Date
+  budget      Float?
+  utmSource   String?        @map("utm_source")
+  utmMedium   String?        @map("utm_medium")
+  utmCampaign String?        @map("utm_campaign")
+  createdById String?        @map("created_by_id") @db.Uuid
+  updatedById String?        @map("updated_by_id") @db.Uuid
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at")
+  createdBy   User?          @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy   User?          @relation("CampaignUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  leads       Lead[]
+  events      CommunicationEvent[]
+
+  @@index([status])
+  @@index([sourceCode])
+  @@index([createdAt])
+  @@map("campaigns")
+}
+
+model CommunicationEvent {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channel               CommunicationChannel
+  eventAt               DateTime              @default(now()) @map("event_at")
+  senderName            String?               @map("sender_name")
+  senderPhone           String?               @map("sender_phone")
+  senderPhoneNormalized String?               @map("sender_phone_normalized")
+  senderEmail           String?               @map("sender_email")
+  preferredCountryCode  String?               @map("preferred_country_code")
+  subject               String?
+  message               String?               @db.Text
+  sourceCode            String?               @map("source_code")
+  campaignName          String?               @map("campaign_name")
+  campaignId            String?               @map("campaign_id") @db.Uuid
+  utmSource             String?               @map("utm_source")
+  utmMedium             String?               @map("utm_medium")
+  utmCampaign           String?               @map("utm_campaign")
+  direction             String                @default("incoming")
+  externalId            String?               @map("external_id")
+  formName              String?               @map("form_name")
+  rawPayload            Json?                 @map("raw_payload")
+  processingStatus      CommunicationStatus   @default(PENDING) @map("processing_status")
+  processingError       String?               @map("processing_error") @db.Text
+  leadId                String?               @map("lead_id") @db.Uuid
+  leadCreated           Boolean               @default(false) @map("lead_created")
+  activityId            String?               @map("activity_id") @db.Uuid
+  processedAt           DateTime?             @map("processed_at")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at")
+  lead                  Lead?                 @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  campaign              Campaign?             @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@unique([channel, externalId])
+  @@index([processingStatus])
+  @@index([channel])
+  @@index([eventAt])
+  @@index([leadId])
+  @@index([senderPhoneNormalized])
+  @@index([senderEmail])
+  @@index([campaignId])
+  @@map("communication_events")
 }

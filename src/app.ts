@@ -17,7 +17,11 @@ import { searchRouter } from './modules/search/search.routes'
 import { usersRouter } from './modules/users/users.routes'
 import { leadsRouter } from './modules/leads/leads.routes'
 import { followUpsRouter } from './modules/follow-ups/follow-ups.routes'
+import { notificationsRouter } from './modules/notifications/notifications.routes'
+import { webhooksRouter } from './modules/integrations/webhooks.routes'
 import { pipelineRouter } from './modules/pipeline/pipeline.routes'
+import { communicationsRouter } from './modules/communications/communications.routes'
+import { campaignsRouter } from './modules/campaigns/campaigns.routes'
 
 export function createApp() {
   const app = express()
@@ -44,6 +48,10 @@ export function createApp() {
   app.use('/api/activities', activitiesRouter)
   app.use('/api/leads', leadsRouter)
   app.use('/api/follow-ups', followUpsRouter)
+  app.use('/api/notifications', notificationsRouter)
+  app.use('/api/communications', communicationsRouter)
+  app.use('/api/campaigns', campaignsRouter)
+  app.use('/api/webhooks', webhooksRouter)
   app.use('/api/pipeline', pipelineRouter)
   app.use('/api/search', searchRouter)
 

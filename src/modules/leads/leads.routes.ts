@@ -4,6 +4,7 @@ import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
   assignLead,
   checkDuplicate,
+  closeLead,
   createLead,
   createLeadFollowUp,
   getLead,
@@ -13,6 +14,7 @@ import {
   listLeads,
   listLeadStatusHistory,
   listMyLeads,
+  reopenLead,
   updateLead,
   updateLeadStatus,
   updatePriority,
@@ -121,7 +123,7 @@ leadsRouter.get(
   },
 )
 
-leadsRouter.get('/assignees', requirePermission(['lead:assign', 'lead:reassign']), async (req, res, next) => {
+leadsRouter.get('/assignees', requirePermission(['lead:assign', 'lead:reassign', 'lead:reopen']), async (req, res, next) => {
   try {
     res.json(
       await listLeadAssignees(req.auth!, {
@@ -178,6 +180,40 @@ leadsRouter.patch(
     try {
       res.json(
         await updateLeadStatus(req.auth!, routeParam(req.params.id), body(req), {
+          ipAddress: requestIp(req),
+          userAgent: requestUserAgent(req),
+        }),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.patch(
+  '/:id/close',
+  requirePermission('lead:close', 'You do not have permission to close or reopen this lead.'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await closeLead(req.auth!, routeParam(req.params.id), body(req), {
+          ipAddress: requestIp(req),
+          userAgent: requestUserAgent(req),
+        }),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.patch(
+  '/:id/reopen',
+  requirePermission('lead:reopen', 'You do not have permission to close or reopen this lead.'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await reopenLead(req.auth!, routeParam(req.params.id), body(req), {
           ipAddress: requestIp(req),
           userAgent: requestUserAgent(req),
         }),

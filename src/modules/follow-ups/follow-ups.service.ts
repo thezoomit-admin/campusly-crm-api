@@ -19,6 +19,7 @@ import {
   FOLLOW_UP_TYPES,
   type ScheduleHistoryEntry,
 } from './follow-ups.constants'
+import { computeReminderAt } from './follow-ups.utils'
 
 export type AuditMeta = { ipAddress?: string; userAgent?: string }
 
@@ -288,6 +289,9 @@ export async function createFollowUp(auth: AuthContext, body: Record<string, unk
     throw httpError.validation({ nextAction: 'Please enter the next action.' }, 'Please enter the next action.')
   }
 
+  const reminder = normalizeReminder(body.reminder)
+  const reminderAt = computeReminderAt(dueAt, reminder)
+
   const followUp = await prisma.followUp.create({
     data: {
       leadId: lead.id,
@@ -300,7 +304,9 @@ export async function createFollowUp(auth: AuthContext, body: Record<string, unk
       purposeOther,
       notes: asOptionalString(body.notes, 1000),
       nextAction,
-      reminder: normalizeReminder(body.reminder),
+      reminder,
+      reminderAt,
+      reminderStatus: reminderAt ? 'Pending' : 'Skipped',
       ownerId: lead.ownerId || auth.user.id,
       ownerName: lead.ownerName || auth.user.fullName,
       source: asOptionalString(body.source, 40) || 'Manual',
@@ -402,6 +408,8 @@ export async function completeFollowUp(
     }
     const nextDueAt = requireDueAt(body.nextDueAt)
     const nextType = normalizeType(body.nextType || current.type)
+    const nextReminder = normalizeReminder(body.nextReminder || current.reminder)
+    const nextReminderAt = computeReminderAt(nextDueAt, nextReminder)
     const created = await prisma.followUp.create({
       data: {
         leadId: current.leadId,
@@ -414,7 +422,9 @@ export async function completeFollowUp(
         purposeOther: current.purposeOther,
         notes: asOptionalString(body.nextNotes, 1000),
         nextAction,
-        reminder: normalizeReminder(body.nextReminder || current.reminder),
+        reminder: nextReminder,
+        reminderAt: nextReminderAt,
+        reminderStatus: nextReminderAt ? 'Pending' : 'Skipped',
         ownerId: current.ownerId || auth.user.id,
         ownerName: current.ownerName || auth.user.fullName,
         source: 'Manual',
@@ -497,6 +507,7 @@ export async function rescheduleFollowUp(
     throw httpError.badRequest('Cannot reschedule a follow-up without a lead.')
   }
 
+  const createdReminderAt = computeReminderAt(newDueAt, current.reminder)
   const created = await prisma.followUp.create({
     data: {
       leadId: current.leadId,
@@ -510,6 +521,8 @@ export async function rescheduleFollowUp(
       notes: current.notes,
       nextAction: current.nextAction,
       reminder: current.reminder,
+      reminderAt: createdReminderAt,
+      reminderStatus: createdReminderAt ? 'Pending' : 'Skipped',
       ownerId: current.ownerId,
       ownerName: current.ownerName,
       source: 'Manual',

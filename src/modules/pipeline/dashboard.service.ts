@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma'
 import { syncOverdueFollowUps } from '../../jobs/overdue-follow-ups'
+import { ratePercent } from '../follow-ups/follow-ups.utils'
 
 const SOURCE_COLORS = ['#38bdf8', '#34d399', '#818cf8', '#fb7185', '#f43f5e', '#fbbf24', '#22d3ee', '#a78bfa']
 const CLOSED_APPLICATION_STATUSES = ['Draft', 'Lost', 'Rejected', 'Cancelled', 'Withdrawn']
@@ -116,6 +117,9 @@ export async function getDashboardOverview(year: number, month: number) {
     overdueFollowUps,
     dueTodayFollowUps,
     completedTodayFollowUps,
+    dueInRange,
+    completedInRange,
+    onTimeCandidates,
     followUpsLast30,
     followUpsPrev30,
     paidPayments,
@@ -163,6 +167,26 @@ export async function getDashboardOverview(year: number, month: number) {
         status: { in: ['Completed', 'Done'] },
         completedAt: { gte: startOfUtcDay(now), lt: addUtcDays(startOfUtcDay(now), 1) },
       },
+    }),
+    prisma.followUp.count({
+      where: {
+        dueAt: { gte: last30, lt: addUtcDays(startOfUtcDay(now), 1) },
+        status: { notIn: ['Cancelled', 'Rescheduled'] },
+      },
+    }),
+    prisma.followUp.count({
+      where: {
+        dueAt: { gte: last30, lt: addUtcDays(startOfUtcDay(now), 1) },
+        status: { in: ['Completed', 'Done'] },
+      },
+    }),
+    prisma.followUp.findMany({
+      where: {
+        dueAt: { gte: last30, lt: addUtcDays(startOfUtcDay(now), 1) },
+        status: { in: ['Completed', 'Done'] },
+        completedAt: { not: null },
+      },
+      select: { dueAt: true, completedAt: true },
     }),
     prisma.followUp.count({ where: { createdAt: { gte: last30 }, status: { in: OPEN_FOLLOW_UP_STATUSES } } }),
     prisma.followUp.count({
@@ -230,6 +254,11 @@ export async function getDashboardOverview(year: number, month: number) {
   const revenueTotal = paidPayments.reduce((sum, row) => sum + parseMoney(row.amount), 0)
   const revenueLast30 = paymentsLast30.reduce((sum, row) => sum + parseMoney(row.amount), 0)
   const revenuePrev30 = paymentsPrev30.reduce((sum, row) => sum + parseMoney(row.amount), 0)
+  const onTimeInRange = onTimeCandidates.filter(
+    (row) => row.completedAt && row.dueAt && row.completedAt.getTime() <= row.dueAt.getTime(),
+  ).length
+  const completionRate = ratePercent(completedInRange, dueInRange)
+  const onTimeRate = ratePercent(onTimeInRange, dueInRange)
 
   const sourceTotal = sourceRows.reduce((sum, row) => sum + row._count._all, 0)
   const leadSources = sourceRows.map((row, index) => {
@@ -317,6 +346,11 @@ export async function getDashboardOverview(year: number, month: number) {
       dueToday: dueTodayFollowUps,
       completedToday: completedTodayFollowUps,
       pending: pendingFollowUps,
+      completionRate,
+      onTimeRate,
+      dueInRange,
+      completedInRange,
+      onTimeInRange,
     },
     leadSources,
     leadTrend,
