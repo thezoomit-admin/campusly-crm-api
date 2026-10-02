@@ -21,6 +21,7 @@ import {
   updateQualification,
 } from './leads.service'
 import { correctLeadCampaign, correctLeadSource, listAttributionChanges } from './lead-attribution'
+import { handoverLead } from './leads.handover'
 
 export const leadsRouter = Router()
 
@@ -124,12 +125,13 @@ leadsRouter.get(
   },
 )
 
-leadsRouter.get('/assignees', requirePermission(['lead:assign', 'lead:reassign', 'lead:reopen']), async (req, res, next) => {
+leadsRouter.get('/assignees', requirePermission(['lead:assign', 'lead:reassign', 'lead:reopen', 'lead:handover']), async (req, res, next) => {
   try {
     res.json(
       await listLeadAssignees(req.auth!, {
         teamId: queryString(req.query.teamId),
         search: queryString(req.query.search),
+        role: queryString(req.query.role),
       }),
     )
   } catch (error) {
@@ -160,6 +162,23 @@ leadsRouter.get('/:id/assignments', requirePermission('lead:view'), async (req, 
     next(error)
   }
 })
+
+leadsRouter.post(
+  '/:id/handover',
+  requirePermission('lead:handover', 'You do not have permission to access this lead\'s workspace.'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await handoverLead(req.auth!, routeParam(req.params.id), body(req), {
+          ipAddress: requestIp(req),
+          userAgent: requestUserAgent(req),
+        }),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
 
 leadsRouter.patch('/:id/assign', requirePermission(['lead:assign', 'lead:reassign']), async (req, res, next) => {
   try {
