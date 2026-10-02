@@ -32,6 +32,9 @@ export const httpError = {
   assignmentFailed() {
     return new HttpError(500, 'Unable to assign the selected lead. Please try again.', 'LEAD_ASSIGNMENT_FAILED')
   },
+  handoverFailed() {
+    return new HttpError(500, 'Unable to assign the lead to the selected Counsellor. Please try again.', 'LEAD_HANDOVER_FAILED')
+  },
   unauthenticated() {
     return new HttpError(401, 'Authentication required', 'UNAUTHENTICATED')
   },

@@ -171,7 +171,7 @@ function classifyAudit(action: string, entityType: string | null): FeedCategory 
   const text = `${action} ${entityType || ''}`.toLowerCase()
   if (text.includes('document') || text.includes('verif')) return 'document'
   if (text.includes('payment') || text.includes('receipt') || text.includes('discount')) return 'payment'
-  if (text.includes('assign')) return 'assignment'
+  if (text.includes('assign') || text.includes('handover')) return 'assignment'
   if (text.includes('status')) return 'status'
   if (text.includes('close') || text.includes('reopen') || text.includes('file')) return 'file'
   return 'system'
@@ -221,7 +221,13 @@ function auditDetails(action: string, entityType: string | null, entityId: strin
 }
 
 function skipAuditAction(action: string) {
-  return action.startsWith('ACTIVITY_') || action === 'LEAD_STATUS_CHANGED' || action === 'LEAD_CLOSED' || action === 'LEAD_REOPENED'
+  return (
+    action.startsWith('ACTIVITY_') ||
+    action === 'LEAD_STATUS_CHANGED' ||
+    action === 'LEAD_CLOSED' ||
+    action === 'LEAD_REOPENED' ||
+    action === 'LEAD_HANDED_OVER'
+  )
 }
 
 function inRange(date: Date, from?: Date, to?: Date) {

@@ -734,6 +734,7 @@ export async function createLead(auth: AuthContext, body: Record<string, unknown
         leadId: created.id,
         toOwnerId: assignment.ownerId,
         teamId: assignment.teamId,
+        kind: assignment.ownerId ? 'REASSIGN' : 'POOL_ASSIGN',
         reason: assignment.ownerId ? 'Country-based assignment on create' : 'Entered lead pool',
         createdById: auth.user.id,
       },
@@ -1405,6 +1406,7 @@ export async function reopenLead(auth: AuthContext, id: string, body: Record<str
             fromOwnerId,
             toOwnerId: assignee.id,
             teamId,
+            kind: 'REOPEN',
             reason: `Reopened — ${reopenReason}`.slice(0, 400),
             createdById: auth.user.id,
           },
@@ -1865,19 +1867,20 @@ export async function listLeadPool(
   }
 }
 
-export async function listLeadAssignees(auth: AuthContext, query: { teamId?: string; search?: string }) {
-  if (!hasPermission(auth.permissions, ['lead:assign', 'lead:reassign', 'lead:reopen'])) {
+export async function listLeadAssignees(auth: AuthContext, query: { teamId?: string; search?: string; role?: string }) {
+  if (!hasPermission(auth.permissions, ['lead:assign', 'lead:reassign', 'lead:reopen', 'lead:handover'])) {
     throw httpError.accessDenied()
   }
 
   const search = query.search?.trim()
   const teamId = query.teamId?.trim()
+  const role = query.role === 'counsellor' || query.role === 'call_executive' ? query.role : undefined
   const users = await prisma.user.findMany({
     where: {
       status: 'ACTIVE',
       AND: [
-        assigneeVisibilityWhere(auth),
-        { primaryRole: { key: { in: [...ASSIGNEE_ROLE_KEYS] } } },
+        role === 'counsellor' ? {} : assigneeVisibilityWhere(auth),
+        role ? { primaryRole: { key: role } } : { primaryRole: { key: { in: [...ASSIGNEE_ROLE_KEYS] } } },
         teamId ? { teamId } : {},
         search
           ? {
@@ -2057,7 +2060,9 @@ export async function listLeadAssignments(auth: AuthContext, id: string) {
       id: row.id,
       fromOwner: row.fromOwner ? { id: row.fromOwner.id, name: row.fromOwner.fullName } : null,
       toOwner: row.toOwner ? { id: row.toOwner.id, name: row.toOwner.fullName } : null,
+      kind: row.kind,
       reason: row.reason,
+      handoverNote: row.handoverNote,
       assignedBy: row.createdBy ? { id: row.createdBy.id, name: row.createdBy.fullName } : null,
       createdAt: row.createdAt.toISOString(),
     })),

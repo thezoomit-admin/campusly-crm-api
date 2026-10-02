@@ -285,14 +285,20 @@ export function assigneeVisibilityWhere(auth: AuthContext): Prisma.UserWhereInpu
   return { id: auth.user.id }
 }
 
-export async function assertCanViewLead(auth: AuthContext, leadId: string) {
+export const WORKSPACE_ACCESS_DENIED = 'You do not have permission to access this lead\'s workspace.'
+
+export async function findReadableLead(auth: AuthContext, leadId: string) {
   const lead = await prisma.lead.findFirst({
     where: { id: leadId, AND: [leadReadableWhere(auth)] },
   })
-  if (!lead) {
-    throw httpError.notFound('Lead not found.')
-  }
-  return lead
+  if (lead) return lead
+  const exists = await prisma.lead.findUnique({ where: { id: leadId }, select: { id: true } })
+  if (exists) throw httpError.accessDenied(WORKSPACE_ACCESS_DENIED)
+  throw httpError.notFound('Lead not found.')
+}
+
+export async function assertCanViewLead(auth: AuthContext, leadId: string) {
+  return findReadableLead(auth, leadId)
 }
 
 export async function assertCanManageLeadAssignment(auth: AuthContext, leadId: string) {
@@ -301,12 +307,7 @@ export async function assertCanManageLeadAssignment(auth: AuthContext, leadId: s
   if (!canAssign && !canReassign) {
     throw httpError.accessDenied()
   }
-  const lead = await prisma.lead.findFirst({
-    where: { id: leadId, AND: [leadReadableWhere(auth)] },
-  })
-  if (!lead) {
-    throw httpError.notFound('Lead not found.')
-  }
+  const lead = await findReadableLead(auth, leadId)
   return { lead, canAssign, canReassign }
 }
 

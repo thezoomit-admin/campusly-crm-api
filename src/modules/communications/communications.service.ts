@@ -551,6 +551,7 @@ async function processEvent(eventId: string) {
             leadId: lead.id,
             toOwnerId: assignment.ownerId,
             teamId: assignment.teamId,
+            kind: assignment.ownerId ? 'REASSIGN' : 'POOL_ASSIGN',
             reason: assignment.ownerId
               ? 'Country-based assignment from Communication Hub'
               : 'Entered lead pool from Communication Hub',

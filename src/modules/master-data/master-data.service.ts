@@ -188,7 +188,11 @@ async function usageCount(category: MasterDataCategory, id: string) {
       },
     }),
   ])
-  return children + employees
+  const [categorizedServices, scopedServices] = await Promise.all([
+    prisma.serviceItem.count({ where: { categoryId: id } }),
+    prisma.serviceItemCountry.count({ where: { countryId: id } }),
+  ])
+  return children + employees + categorizedServices + scopedServices
 }
 
 async function resolveParent(category: MasterDataCategory, parentId: unknown, currentParentId?: string | null) {
@@ -305,6 +309,8 @@ async function getItemRecord(category: MasterDataCategory, id: string): Promise<
           designationEmployees: true,
           employmentTypeEmployees: true,
           employmentStatusEmployees: true,
+          categorizedServiceItems: true,
+          scopedServiceItems: true,
         },
       },
     },
@@ -329,7 +335,9 @@ async function getItemRecord(category: MasterDataCategory, id: string): Promise<
       row._count.children +
       row._count.designationEmployees +
       row._count.employmentTypeEmployees +
-      row._count.employmentStatusEmployees,
+      row._count.employmentStatusEmployees +
+      row._count.categorizedServiceItems +
+      row._count.scopedServiceItems,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     createdBy: row.createdBy,
@@ -505,6 +513,8 @@ export async function listItems(query: MasterDataQuery) {
           designationEmployees: true,
           employmentTypeEmployees: true,
           employmentStatusEmployees: true,
+          categorizedServiceItems: true,
+          scopedServiceItems: true,
         },
       },
     },
@@ -529,7 +539,9 @@ export async function listItems(query: MasterDataQuery) {
       row._count.children +
       row._count.designationEmployees +
       row._count.employmentTypeEmployees +
-      row._count.employmentStatusEmployees,
+      row._count.employmentStatusEmployees +
+      row._count.categorizedServiceItems +
+      row._count.scopedServiceItems,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       createdBy: row.createdBy,

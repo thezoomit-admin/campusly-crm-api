@@ -163,6 +163,8 @@ model User {
   whatsappMessagesSent WhatsAppMessage[]     @relation("WhatsAppMessageSender")
   emailThreadsAssigned EmailThread[]         @relation("EmailThreadAssignee")
   emailMessagesSent    EmailMessage[]        @relation("EmailMessageSender")
+  serviceItemsCreated  ServiceItem[]         @relation("ServiceItemCreatedBy")
+  serviceItemsUpdated  ServiceItem[]         @relation("ServiceItemUpdatedBy")
 
   @@index([primaryRoleId])
   @@index([departmentId])
@@ -328,6 +330,8 @@ model MasterDataItem {
   designationEmployees      Employee[] @relation("EmployeeDesignation")
   employmentTypeEmployees   Employee[] @relation("EmployeeEmploymentType")
   employmentStatusEmployees Employee[] @relation("EmployeeEmploymentStatus")
+  categorizedServiceItems   ServiceItem[]        @relation("ServiceItemCategory")
+  scopedServiceItems        ServiceItemCountry[] @relation("ServiceItemCountryMaster")
 
   @@unique([categoryKey, nameNormalized])
   @@unique([categoryKey, code])
@@ -335,6 +339,39 @@ model MasterDataItem {
   @@index([parentId])
   @@index([createdAt])
   @@map("master_data_items")
+}
+
+model ServiceItem {
+  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String
+  nameNormalized String               @unique @map("name_normalized")
+  description    String?              @db.Text
+  defaultPrice   Decimal              @map("default_price") @db.Decimal(14, 2)
+  categoryId     String               @map("category_id") @db.Uuid
+  status         RecordStatus         @default(ACTIVE)
+  createdById    String?              @map("created_by_id") @db.Uuid
+  updatedById    String?              @map("updated_by_id") @db.Uuid
+  createdAt      DateTime             @default(now()) @map("created_at")
+  updatedAt      DateTime             @default(now()) @updatedAt @map("updated_at")
+  category       MasterDataItem       @relation("ServiceItemCategory", fields: [categoryId], references: [id], onDelete: Restrict)
+  countries      ServiceItemCountry[]
+  createdBy      User?                @relation("ServiceItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?                @relation("ServiceItemUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([categoryId, status])
+  @@index([status, name])
+  @@map("service_items")
+}
+
+model ServiceItemCountry {
+  serviceItemId String         @map("service_item_id") @db.Uuid
+  countryId     String         @map("country_id") @db.Uuid
+  serviceItem   ServiceItem    @relation(fields: [serviceItemId], references: [id], onDelete: Cascade)
+  country       MasterDataItem @relation("ServiceItemCountryMaster", fields: [countryId], references: [id], onDelete: Restrict)
+
+  @@id([serviceItemId, countryId])
+  @@index([countryId])
+  @@map("service_item_countries")
 }
 
 model AuditLog {
@@ -610,15 +647,26 @@ model CountryAssignmentRule {
   @@map("country_assignment_rules")
 }
 
+enum LeadAssignmentKind {
+  POOL_ASSIGN
+  REASSIGN
+  HANDOVER
+  REOPEN
+
+  @@map("lead_assignment_kind")
+}
+
 model LeadAssignment {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  leadId      String   @map("lead_id") @db.Uuid
-  fromOwnerId String?  @map("from_owner_id") @db.Uuid
-  toOwnerId   String?  @map("to_owner_id") @db.Uuid
-  teamId      String?  @map("team_id") @db.Uuid
-  reason      String?
-  createdById String?  @map("created_by_id") @db.Uuid
-  createdAt   DateTime @default(now()) @map("created_at")
+  id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId       String             @map("lead_id") @db.Uuid
+  fromOwnerId  String?            @map("from_owner_id") @db.Uuid
+  toOwnerId    String?            @map("to_owner_id") @db.Uuid
+  teamId       String?            @map("team_id") @db.Uuid
+  kind         LeadAssignmentKind @default(REASSIGN)
+  reason       String?
+  handoverNote Json?              @map("handover_note")
+  createdById  String?            @map("created_by_id") @db.Uuid
+  createdAt    DateTime           @default(now()) @map("created_at")
   lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
   fromOwner   User?    @relation("AssignmentFrom", fields: [fromOwnerId], references: [id], onDelete: SetNull)
   toOwner     User?    @relation("AssignmentTo", fields: [toOwnerId], references: [id], onDelete: SetNull)
