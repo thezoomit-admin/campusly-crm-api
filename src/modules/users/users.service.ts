@@ -3,12 +3,13 @@ import { config } from '../../config'
 import { writeAuditLog } from '../../lib/audit'
 import { httpError } from '../../lib/http-error'
 import { prisma } from '../../lib/prisma'
-import { defaultScopesForRole } from '../auth/access'
+import { defaultScopesForRole, isCriticalPermission, permissionLabel, userDirectoryScope } from '../auth/access'
 import { normalizeEmail, normalizeUsername } from '../auth/identifier'
 import { hashPassword } from '../auth/password'
 import { requestPasswordReset } from '../auth/password-reset.service'
 import type { AuthContext } from '../auth/session.service'
 import { revokeSession, revokeUserSessions } from '../auth/session.service'
+import { notifyCriticalPermissionChanges } from '../notifications/notifications.service'
 import { saveUserProfilePhoto } from './users.storage'
 
 const userListInclude = {
@@ -83,14 +84,10 @@ async function assertNotLastAdmin(userId: string, nextStatus?: UserStatus, nextR
 }
 
 function visibilityWhere(auth: AuthContext): Prisma.UserWhereInput {
-  const scope = auth.dataScopes.lead ?? 'OWN'
+  const scope = userDirectoryScope(auth.role.key)
 
   if (scope === 'ALL') {
     return {}
-  }
-
-  if (scope === 'DEPARTMENT' && auth.user.departmentId) {
-    return { departmentId: auth.user.departmentId }
   }
 
   if (scope === 'TEAM' && auth.user.teamId) {
@@ -98,6 +95,13 @@ function visibilityWhere(auth: AuthContext): Prisma.UserWhereInput {
   }
 
   return { id: auth.user.id }
+}
+
+function effectLabel(effect: string) {
+  if (effect === 'ALLOW' || effect === 'ALLOWED') return 'Allowed'
+  if (effect === 'DENY' || effect === 'DENIED') return 'Denied'
+  if (effect === 'ROLE_DEFAULT') return 'Role default'
+  return effect
 }
 
 async function assertCanViewUser(auth: AuthContext, userId: string) {
@@ -656,14 +660,14 @@ export async function setUserOverrides(
 
   const existing = await prisma.user.findUnique({
     where: { id: userId },
-    include: { permissionOverrides: true },
+    include: { permissionOverrides: { include: { permission: true } } },
   })
   if (!existing) {
     throw httpError.notFound('User not found.')
   }
 
-  const previous = new Map(existing.permissionOverrides.map((row) => [row.permissionId, row.effect]))
-  const nextRows: Array<{ permissionId: string; effect: 'ALLOW' | 'DENY' }> = []
+  const previous = new Map(existing.permissionOverrides.map((row) => [row.permissionId, row]))
+  const nextRows: Array<{ permissionId: string; effect: 'ALLOW' | 'DENY'; resource: string; action: string }> = []
 
   for (const item of overrides) {
     if (!item || typeof item !== 'object') {
@@ -677,8 +681,15 @@ export async function setUserOverrides(
     if (!permission) {
       throw httpError.invalidPermission()
     }
-    nextRows.push({ permissionId: permission.id, effect: row.effect })
+    nextRows.push({
+      permissionId: permission.id,
+      effect: row.effect,
+      resource: permission.resource,
+      action: permission.action,
+    })
   }
+
+  const historyChanges: Array<{ resource: string; action: string; from: string; to: string }> = []
 
   await prisma.$transaction(async (tx) => {
     await tx.userPermissionOverride.deleteMany({ where: { userId } })
@@ -693,7 +704,7 @@ export async function setUserOverrides(
     }
 
     for (const row of nextRows) {
-      const previousEffect = previous.get(row.permissionId) ?? 'ROLE_DEFAULT'
+      const previousEffect = previous.get(row.permissionId)?.effect ?? 'ROLE_DEFAULT'
       if (previousEffect !== row.effect) {
         await tx.permissionHistory.create({
           data: {
@@ -704,7 +715,32 @@ export async function setUserOverrides(
             changedById: auth.user.id,
           },
         })
+        historyChanges.push({
+          resource: row.resource,
+          action: row.action,
+          from: String(previousEffect),
+          to: row.effect,
+        })
       }
+    }
+
+    for (const [permissionId, row] of previous) {
+      if (nextRows.some((next) => next.permissionId === permissionId)) continue
+      await tx.permissionHistory.create({
+        data: {
+          userId,
+          permissionId,
+          previousEffect: String(row.effect),
+          newEffect: 'ROLE_DEFAULT',
+          changedById: auth.user.id,
+        },
+      })
+      historyChanges.push({
+        resource: row.permission.resource,
+        action: row.permission.action,
+        from: String(row.effect),
+        to: 'ROLE_DEFAULT',
+      })
     }
   })
 
@@ -717,6 +753,19 @@ export async function setUserOverrides(
     userAgent: meta.userAgent,
     metadata: { overrides: nextRows },
   })
+
+  const criticalChanges = historyChanges.filter((change) => isCriticalPermission(change.resource, change.action))
+  if (criticalChanges.length > 0) {
+    await notifyCriticalPermissionChanges({
+      userIds: [userId],
+      actorName: auth.user.fullName,
+      changes: criticalChanges.map((change) => ({
+        label: permissionLabel(change.resource, change.action),
+        from: effectLabel(change.from),
+        to: effectLabel(change.to),
+      })),
+    })
+  }
 
   return getUser(auth, userId)
 }

@@ -2,7 +2,9 @@ import type { Prisma, RecordStatus } from '../../lib/prisma-client'
 import { writeAuditLog } from '../../lib/audit'
 import { httpError } from '../../lib/http-error'
 import { prisma } from '../../lib/prisma'
-import type { AuthContext } from '../auth/session.service'
+import { isCriticalPermission, permissionLabel } from '../auth/access'
+import { revokeUserSessions, type AuthContext } from '../auth/session.service'
+import { notifyCriticalPermissionChanges } from '../notifications/notifications.service'
 
 function slugify(value: string) {
   return value
@@ -12,7 +14,7 @@ function slugify(value: string) {
     .replace(/^_|_$/g, '')
 }
 
-export async function listRoles(query: { search?: string; status?: string }) {
+export async function listRoles(query: { search?: string; status?: string; assignedUserCount?: string }) {
   const where: Prisma.RoleWhereInput = {
     AND: [
       query.search ? { name: { contains: query.search, mode: 'insensitive' } } : {},
@@ -29,17 +31,42 @@ export async function listRoles(query: { search?: string; status?: string }) {
     orderBy: { name: 'asc' },
   })
 
-  return roles.map((role) => ({
-    id: role.id,
-    key: role.key,
-    name: role.name,
-    description: role.description,
-    status: role.status,
-    isSystem: role.isSystem,
-    assignedUserCount: role._count.users,
-    permissions: role.permissions.map((row) => `${row.permission.resource}:${row.permission.action}`),
-    permissionIds: role.permissions.map((row) => row.permissionId),
-  }))
+  const parsedCount = query.assignedUserCount?.trim()
+  const userCount =
+    parsedCount !== undefined && parsedCount !== '' && Number.isInteger(Number(parsedCount)) && Number(parsedCount) >= 0
+      ? Number(parsedCount)
+      : null
+
+  return roles
+    .map((role) => ({
+      id: role.id,
+      key: role.key,
+      name: role.name,
+      description: role.description,
+      status: role.status,
+      isSystem: role.isSystem,
+      assignedUserCount: role._count.users,
+      permissions: role.permissions.map((row) => `${row.permission.resource}:${row.permission.action}`),
+      permissionIds: role.permissions.map((row) => row.permissionId),
+    }))
+    .filter((role) => userCount === null || role.assignedUserCount === userCount)
+}
+
+/** Lightweight role list for filters/assign dropdowns — no permission matrix. */
+export async function listRoleOptions() {
+  const roles = await prisma.role.findMany({
+    select: { id: true, key: true, name: true, status: true },
+    orderBy: { name: 'asc' },
+  })
+  return roles
+}
+
+async function revokeSessionsForRole(roleId: string) {
+  const members = await prisma.user.findMany({
+    where: { primaryRoleId: roleId },
+    select: { id: true },
+  })
+  await Promise.all(members.map((member) => revokeUserSessions(member.id)))
 }
 
 export async function getRole(id: string) {
@@ -133,6 +160,10 @@ export async function updateRole(
     },
   })
 
+  if (role.status === 'INACTIVE' && existing.status !== 'INACTIVE') {
+    await revokeSessionsForRole(id)
+  }
+
   await writeAuditLog({
     userId: auth.user.id,
     action: 'ROLE_UPDATED',
@@ -170,6 +201,10 @@ export async function updateRoleStatus(
     data: { status },
   })
 
+  if (status === 'INACTIVE') {
+    await revokeSessionsForRole(id)
+  }
+
   await writeAuditLog({
     userId: auth.user.id,
     action: 'ROLE_STATUS_CHANGED',
@@ -202,7 +237,7 @@ export async function deleteRole(
   }
 
   if (role._count.users > 0) {
-    throw httpError.roleInUse()
+    throw httpError.roleInUse(role._count.users)
   }
 
   await prisma.role.delete({ where: { id } })
@@ -254,6 +289,7 @@ export async function setRolePermissions(
 
   const previous = new Map(role.permissions.map((row) => [row.permissionId, `${row.permission.resource}:${row.permission.action}`]))
   const nextIds = new Set(permissions.map((item) => item.id))
+  const criticalChanges: Array<{ label: string; from: string; to: string }> = []
 
   await prisma.$transaction(async (tx) => {
     await tx.rolePermission.deleteMany({ where: { roleId: id } })
@@ -272,10 +308,17 @@ export async function setRolePermissions(
             changedById: auth.user.id,
           },
         })
+        if (isCriticalPermission(permission.resource, permission.action)) {
+          criticalChanges.push({
+            label: permissionLabel(permission.resource, permission.action),
+            from: 'Denied',
+            to: 'Allowed',
+          })
+        }
       }
     }
 
-    for (const [permissionId] of previous) {
+    for (const [permissionId, key] of previous) {
       if (!nextIds.has(permissionId)) {
         await tx.permissionHistory.create({
           data: {
@@ -286,6 +329,14 @@ export async function setRolePermissions(
             changedById: auth.user.id,
           },
         })
+        const [resource, action] = key.split(':')
+        if (resource && action && isCriticalPermission(resource, action)) {
+          criticalChanges.push({
+            label: permissionLabel(resource, action),
+            from: 'Allowed',
+            to: 'Denied',
+          })
+        }
       }
     }
   })
@@ -299,6 +350,19 @@ export async function setRolePermissions(
     userAgent: meta.userAgent,
     metadata: { permissionCount: permissions.length },
   })
+
+  if (criticalChanges.length > 0) {
+    const members = await prisma.user.findMany({
+      where: { primaryRoleId: id, NOT: { id: auth.user.id } },
+      select: { id: true },
+    })
+    await notifyCriticalPermissionChanges({
+      userIds: members.map((member) => member.id),
+      actorName: auth.user.fullName,
+      roleName: role.name,
+      changes: criticalChanges,
+    })
+  }
 
   return getRole(id)
 }

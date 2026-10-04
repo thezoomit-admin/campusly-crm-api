@@ -5,6 +5,7 @@ import {
   createRole,
   deleteRole,
   getRole,
+  listRoleOptions,
   listRoles,
   setRolePermissions,
   updateRole,
@@ -15,11 +16,24 @@ export const rolesRouter = Router()
 
 rolesRouter.use(requireAuth)
 
+rolesRouter.get(
+  '/options',
+  requirePermission(['user:view', 'user:create', 'user:edit', 'role:view']),
+  async (_req, res, next) => {
+    try {
+      res.json({ roles: await listRoleOptions() })
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
 rolesRouter.get('/', requirePermission('role:view'), async (req, res, next) => {
   try {
     const roles = await listRoles({
       search: typeof req.query.search === 'string' ? req.query.search : undefined,
       status: typeof req.query.status === 'string' ? req.query.status : undefined,
+      assignedUserCount: typeof req.query.assignedUserCount === 'string' ? req.query.assignedUserCount : undefined,
     })
     res.json({ roles })
   } catch (error) {

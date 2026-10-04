@@ -190,6 +190,23 @@ export async function login(input: LoginInput) {
     }
   }
 
+  if (user.primaryRole.status !== 'ACTIVE') {
+    queueAuditLog({
+      userId: user.id,
+      action: 'LOGIN_DENIED',
+      entityType: 'user',
+      entityId: user.id,
+      ipAddress,
+      userAgent,
+      metadata: { reason: 'role_inactive', role: user.primaryRole.key },
+    })
+    return {
+      ok: false as const,
+      status: 403,
+      body: { error: 'This role is inactive.', code: 'ROLE_INACTIVE' },
+    }
+  }
+
   // Session create is required for the cookie; lastLogin clear + audit are not on the critical path.
   const session = await createSession({
     userId: user.id,

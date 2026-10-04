@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import type { Prisma } from '../../lib/prisma-client'
 import { prisma } from '../../lib/prisma'
+import { auditDirectoryScope } from '../auth/access'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 
 export const auditRouter = Router()
@@ -10,15 +11,13 @@ auditRouter.use(requireAuth, requirePermission('audit:view'))
 auditRouter.get('/', async (req, res, next) => {
   try {
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : ''
-    const scope = req.auth!.dataScopes.lead ?? 'OWN'
+    const scope = auditDirectoryScope(req.auth!.role.key)
     const where: Prisma.AuditLogWhereInput = {}
 
-    if (scope === 'OWN') {
-      where.userId = req.auth!.user.id
-    } else if (scope === 'TEAM' && req.auth!.user.teamId) {
+    if (scope === 'TEAM' && req.auth!.user.teamId) {
       where.user = { teamId: req.auth!.user.teamId }
-    } else if (scope === 'DEPARTMENT' && req.auth!.user.departmentId) {
-      where.user = { departmentId: req.auth!.user.departmentId }
+    } else if (scope !== 'ALL') {
+      where.userId = req.auth!.user.id
     }
 
     if (search) {
