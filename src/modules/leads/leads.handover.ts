@@ -144,8 +144,16 @@ export async function handoverLead(auth: AuthContext, id: string, body: Record<s
   const counsellor = await prisma.user.findFirst({
     where: {
       id: counsellorId,
-      status: 'ACTIVE',
       primaryRole: { key: 'counsellor' },
+      AND: [
+        {
+          status: 'ACTIVE',
+          OR: [
+            { employee: { is: null } },
+            { employee: { employmentStatus: { code: { in: ['ACTIVE', 'PROBATION'] } } } },
+          ],
+        },
+      ],
     },
     include: { team: { select: { id: true, name: true } }, primaryRole: { select: { key: true } } },
   })

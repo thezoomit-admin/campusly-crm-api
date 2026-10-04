@@ -8,7 +8,9 @@ import {
   deleteEmployeeDocument,
   getEmployee,
   getEmployeeDocumentFile,
+  getEmployeePerformanceSummary,
   getEmployeePhoto,
+  listEmployeeAuditLogs,
   listEmployeeOptions,
   listEmployees,
   updateEmployee,
@@ -99,7 +101,7 @@ employeesRouter.post(
 
 employeesRouter.post(
   '/:id/documents',
-  requirePermission('employee:edit'),
+  requirePermission('employee_document:manage'),
   (req, res, next) => {
     createUpload(req, res, (error: unknown) => {
       if (error) {
@@ -122,7 +124,7 @@ employeesRouter.post(
   },
 )
 
-employeesRouter.delete('/:id/documents/:documentId', requirePermission('employee:edit'), async (req, res, next) => {
+employeesRouter.delete('/:id/documents/:documentId', requirePermission('employee_document:manage'), async (req, res, next) => {
   try {
     const employee = await deleteEmployeeDocument(req.auth!, routeParam(req.params.id), routeParam(req.params.documentId), {
       ipAddress: requestIp(req),
@@ -170,16 +172,46 @@ employeesRouter.get('/:id/photo', requirePermission('employee:view'), async (req
   }
 })
 
-employeesRouter.get('/:id/documents/:documentId', requirePermission('employee:view'), async (req, res, next) => {
-  try {
-    const file = await getEmployeeDocumentFile(req.auth!, routeParam(req.params.id), routeParam(req.params.documentId))
-    res.setHeader('Content-Type', file.mimeType)
-    res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`)
-    res.send(file.buffer)
-  } catch (error) {
-    next(error)
-  }
-})
+employeesRouter.get(
+  '/:id/documents/:documentId',
+  requirePermission(['employee_document:view', 'employee:view']),
+  async (req, res, next) => {
+    try {
+      const file = await getEmployeeDocumentFile(req.auth!, routeParam(req.params.id), routeParam(req.params.documentId))
+      res.setHeader('Content-Type', file.mimeType)
+      res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`)
+      res.send(file.buffer)
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+employeesRouter.get(
+  '/:id/audit-logs',
+  requirePermission(['audit:view', 'employee:view', 'employee:edit']),
+  async (req, res, next) => {
+    try {
+      const logs = await listEmployeeAuditLogs(req.auth!, routeParam(req.params.id))
+      res.json({ logs })
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+employeesRouter.get(
+  '/:id/performance',
+  requirePermission('employee_performance:view'),
+  async (req, res, next) => {
+    try {
+      const performance = await getEmployeePerformanceSummary(req.auth!, routeParam(req.params.id))
+      res.json({ performance })
+    } catch (error) {
+      next(error)
+    }
+  },
+)
 
 employeesRouter.get('/:id', requirePermission('employee:view'), async (req, res, next) => {
   try {

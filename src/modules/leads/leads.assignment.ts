@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma'
 import { canReceiveLeadAssignment } from '../auth/access'
 import { CLOSED_ASSIGNMENT_STATUSES } from './lead-status'
+import { leadEligibleAssigneeWhere } from './leads.helpers'
 
 export type CountryAssignmentResult = {
   ownerId: string | null
@@ -22,14 +23,35 @@ export async function resolveCountryAssignment(countryCode: string | null): Prom
   const rule = await prisma.countryAssignmentRule.findUnique({
     where: { countryCode },
     include: {
-      team: { include: { users: { where: { status: 'ACTIVE' }, select: { id: true, fullName: true, status: true } } } },
-      defaultOwner: { select: { id: true, fullName: true, status: true } },
+      team: {
+        include: {
+          users: {
+            where: leadEligibleAssigneeWhere(),
+            select: { id: true, fullName: true, status: true },
+          },
+        },
+      },
+      defaultOwner: {
+        select: {
+          id: true,
+          fullName: true,
+          status: true,
+          employee: { select: { employmentStatus: { select: { code: true } } } },
+        },
+      },
     },
   })
 
   if (!rule?.isActive) return UNASSIGNED
 
-  if (rule.defaultOwner && canReceiveLeadAssignment(rule.defaultOwner.status)) {
+  const defaultEligible =
+    rule.defaultOwner &&
+    canReceiveLeadAssignment(rule.defaultOwner.status) &&
+    (!rule.defaultOwner.employee ||
+      rule.defaultOwner.employee.employmentStatus.code === 'ACTIVE' ||
+      rule.defaultOwner.employee.employmentStatus.code === 'PROBATION')
+
+  if (defaultEligible && rule.defaultOwner) {
     return {
       ownerId: rule.defaultOwner.id,
       ownerName: rule.defaultOwner.fullName,

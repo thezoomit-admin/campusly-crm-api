@@ -14,6 +14,12 @@ enum UserStatus {
   ACTIVE
   INACTIVE
   SUSPENDED
+  INVITED
+}
+
+enum PasswordTokenPurpose {
+  RESET
+  INVITE
 }
 
 enum RecordStatus {
@@ -159,6 +165,7 @@ model User {
   counselledApplications Application[]       @relation("ApplicationCounsellor")
   counselledStudents  Student[]              @relation("StudentCounsellor")
   uploadedDocuments   CrmDocument[]          @relation("DocumentUploader")
+  uploadedLeadDocuments LeadDocument[]       @relation("LeadDocumentUploader")
   ownedFollowUps      FollowUp[]             @relation("FollowUpOwner")
   notifications       Notification[]         @relation("NotificationRecipient")
   campaignsCreated    Campaign[]             @relation("CampaignCreatedBy")
@@ -310,15 +317,17 @@ model Session {
 }
 
 model PasswordResetToken {
-  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String    @map("user_id") @db.Uuid
-  tokenHash String    @unique @map("token_hash")
-  expiresAt DateTime  @map("expires_at")
-  usedAt    DateTime? @map("used_at")
-  createdAt DateTime  @default(now()) @map("created_at")
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String                @map("user_id") @db.Uuid
+  tokenHash String                @unique @map("token_hash")
+  purpose   PasswordTokenPurpose  @default(RESET)
+  expiresAt DateTime              @map("expires_at")
+  usedAt    DateTime?             @map("used_at")
+  createdAt DateTime              @default(now()) @map("created_at")
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([userId, purpose, usedAt])
   @@map("password_reset_tokens")
 }
 
@@ -675,6 +684,11 @@ model Employee {
   employmentStatusId    String          @map("employment_status_id") @db.Uuid
   reportingManagerId    String?         @map("reporting_manager_id") @db.Uuid
   joiningDate           DateTime        @map("joining_date") @db.Date
+  resignationDate       DateTime?       @map("resignation_date") @db.Date
+  terminationDate       DateTime?       @map("termination_date") @db.Date
+  terminationReason     String?         @map("termination_reason")
+  terminationRemarks    String?         @map("termination_remarks") @db.Text
+  rejoiningDate         DateTime?       @map("rejoining_date") @db.Date
   emergencyName         String?         @map("emergency_name")
   emergencyRelationship String?         @map("emergency_relationship")
   emergencyMobile       String?         @map("emergency_mobile")
@@ -852,6 +866,7 @@ model Lead {
   whatsappConversations WhatsAppConversation[]
   emailThreads        EmailThread[]
   serviceOffers       ServiceOffer[]
+  documents           LeadDocument[]
 
   @@index([status])
   @@index([ownerId])
@@ -863,6 +878,23 @@ model Lead {
   @@index([campaignId])
   @@index([latestCampaignId])
   @@map("leads")
+}
+
+model LeadDocument {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId       String   @map("lead_id") @db.Uuid
+  fileName     String   @map("file_name")
+  mimeType     String   @map("mime_type")
+  storageKey   String   @map("storage_key")
+  fileSize     Int      @map("file_size")
+  uploadedById String?  @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  uploadedBy   User?    @relation("LeadDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([leadId])
+  @@index([uploadedById])
+  @@map("lead_documents")
 }
 
 model CountryAssignmentRule {

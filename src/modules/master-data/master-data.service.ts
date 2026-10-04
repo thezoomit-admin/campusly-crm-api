@@ -126,6 +126,20 @@ function parseExtras(input: Record<string, unknown>, extraFields: MasterDataCate
     }
     return { fileOpeningCharge: Number(text).toFixed(2) }
   }
+  if (extraFields === 'conversationChannel') {
+    const icon = typeof input.icon === 'string' ? input.icon.trim() : ''
+    const activityType = typeof input.activityType === 'string' ? input.activityType.trim().toUpperCase() : ''
+    if (!icon || icon.length > 80 || !/^[a-z][a-z0-9\s_-]*$/i.test(icon)) {
+      throw httpError.invalidMasterData()
+    }
+    if (activityType && !/^[A-Z][A-Z0-9_]{0,31}$/.test(activityType)) {
+      throw httpError.invalidMasterData()
+    }
+    return {
+      icon,
+      ...(activityType ? { activityType } : {}),
+    }
+  }
   if (extraFields !== 'intake') {
     return null
   }
@@ -671,10 +685,12 @@ function parseInput(category: MasterDataCategory, input: Record<string, unknown>
     endDate: input.endDate ?? existing?.extras?.endDate,
     fileOpeningCharge:
       input.fileOpeningCharge === undefined ? existing?.extras?.fileOpeningCharge : input.fileOpeningCharge,
+    icon: input.icon === undefined ? existing?.extras?.icon : input.icon,
+    activityType: input.activityType === undefined ? existing?.extras?.activityType : input.activityType,
   }
   const description =
     typeof input.description === 'string' ? input.description.trim() || null : (existing?.description ?? null)
-  if (description && description.length > 100) {
+  if (description && description.length > 500) {
     throw httpError.invalidMasterData()
   }
   return {
@@ -793,6 +809,8 @@ export async function updateItem(
       endDate: input.endDate === undefined ? existing.extras?.endDate : input.endDate,
       fileOpeningCharge:
         input.fileOpeningCharge === undefined ? existing.extras?.fileOpeningCharge : input.fileOpeningCharge,
+      icon: input.icon === undefined ? existing.extras?.icon : input.icon,
+      activityType: input.activityType === undefined ? existing.extras?.activityType : input.activityType,
     },
     existing,
   )

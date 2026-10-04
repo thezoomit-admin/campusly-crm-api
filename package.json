@@ -29,7 +29,8 @@
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
     "multer": "^2.4.0",
-    "nodemailer": "^10.0.12"
+    "nodemailer": "^10.0.12",
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.9",

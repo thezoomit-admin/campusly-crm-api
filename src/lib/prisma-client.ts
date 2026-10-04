@@ -8,6 +8,8 @@ export type {
   DiscountType,
   OfferLineKind,
   UserStatus,
+  PasswordTokenPurpose,
+  User,
   Gender,
   MaritalStatus,
   EmployeeDocumentType,

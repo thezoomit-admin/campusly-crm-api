@@ -3,11 +3,16 @@ import type { Prisma, UserStatus } from '../../lib/prisma-client'
 import { writeAuditLog } from '../../lib/audit'
 import { httpError } from '../../lib/http-error'
 import { prisma } from '../../lib/prisma'
-import { defaultScopesForRole } from '../auth/access'
+import {
+  defaultScopesForRole,
+  hasPermission,
+  shouldDisableCrmForEmploymentStatus,
+} from '../auth/access'
 import { normalizeEmail, normalizeUsername } from '../auth/identifier'
 import { hashPassword } from '../auth/password'
-import { requestPasswordReset } from '../auth/password-reset.service'
+import { sendAccountInvite } from '../auth/password-reset.service'
 import type { AuthContext } from '../auth/session.service'
+import { getFollowUpPerformance } from '../pipeline/follow-up-performance.service'
 import {
   destroyStoredUpload,
   DOCUMENT_FIELD_MAP,
@@ -50,7 +55,7 @@ export type EmployeeListQuery = {
 
 const GENDERS = new Set(['MALE', 'FEMALE', 'OTHER'])
 const MARITAL_STATUSES = new Set(['SINGLE', 'MARRIED', 'DIVORCED', 'WIDOWED', 'OTHER'])
-const USER_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'SUSPENDED'])
+const USER_STATUSES = new Set(['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED'])
 
 function asString(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
@@ -159,7 +164,13 @@ function crmAccess(user: { status: string } | null) {
   if (!user) {
     return 'NONE'
   }
-  return user.status === 'ACTIVE' ? 'ENABLED' : 'DISABLED'
+  if (user.status === 'ACTIVE') {
+    return 'ENABLED'
+  }
+  if (user.status === 'INVITED') {
+    return 'INVITED'
+  }
+  return 'DISABLED'
 }
 
 function rethrowUnique(error: unknown): never {
@@ -295,7 +306,7 @@ async function resolveManager(
   return manager
 }
 
-async function employmentStatusByCode(code: 'ACTIVE' | 'INACTIVE') {
+async function employmentStatusByCode(code: string) {
   const item = await prisma.masterDataItem.findFirst({
     where: { categoryKey: 'EMPLOYMENT_STATUS', code },
     orderBy: { status: 'asc' },
@@ -304,6 +315,51 @@ async function employmentStatusByCode(code: 'ACTIVE' | 'INACTIVE') {
     throw httpError.badRequest('Employment status is not available.')
   }
   return item
+}
+
+function canViewSensitiveEmployee(auth: AuthContext, employeeUserId: string | null) {
+  if (hasPermission(auth.permissions, 'employee:sensitive')) {
+    return true
+  }
+  return Boolean(employeeUserId && employeeUserId === auth.user.id)
+}
+
+function canViewEmployeeDocuments(auth: AuthContext, employeeUserId: string | null) {
+  if (hasPermission(auth.permissions, 'employee_document:view')) {
+    return true
+  }
+  return Boolean(employeeUserId && employeeUserId === auth.user.id)
+}
+
+export function canManageEmployeeDocuments(auth: AuthContext) {
+  return hasPermission(auth.permissions, 'employee_document:manage')
+}
+
+async function syncCrmAccountForEmploymentStatus(
+  employee: { userId: string | null },
+  statusCode: string | null | undefined,
+) {
+  if (!employee.userId) {
+    return { crmDisabled: false, crmRestored: false }
+  }
+
+  if (shouldDisableCrmForEmploymentStatus(statusCode)) {
+    const updated = await prisma.user.updateMany({
+      where: { id: employee.userId, status: { in: ['ACTIVE', 'INVITED'] } },
+      data: { status: 'INACTIVE' },
+    })
+    return { crmDisabled: updated.count > 0, crmRestored: false }
+  }
+
+  if (statusCode === 'ACTIVE' || statusCode === 'PROBATION' || statusCode === 'ON_LEAVE') {
+    const updated = await prisma.user.updateMany({
+      where: { id: employee.userId, status: 'INACTIVE' },
+      data: { status: 'ACTIVE' },
+    })
+    return { crmDisabled: false, crmRestored: updated.count > 0 }
+  }
+
+  return { crmDisabled: false, crmRestored: false }
 }
 
 async function nextEmployeeCode() {
@@ -321,7 +377,10 @@ function namedRef(item: { id: string; name: string } | null) {
   return item ? { id: item.id, name: item.name } : null
 }
 
-function serializeEmployee(employee: EmployeeRecord) {
+function serializeEmployee(employee: EmployeeRecord, auth?: AuthContext) {
+  const showSensitive = auth ? canViewSensitiveEmployee(auth, employee.userId) : true
+  const showDocuments = auth ? canViewEmployeeDocuments(auth, employee.userId) : true
+
   return {
     id: employee.id,
     employeeCode: employee.employeeCode,
@@ -332,22 +391,27 @@ function serializeEmployee(employee: EmployeeRecord) {
     gender: employee.gender,
     dateOfBirth: employee.dateOfBirth ? dateOnly(employee.dateOfBirth) : null,
     nationality: employee.nationality,
-    identityNumber: employee.identityNumber,
+    identityNumber: showSensitive ? employee.identityNumber : null,
     maritalStatus: employee.maritalStatus,
     personalEmail: employee.personalEmail,
     presentAddress: employee.presentAddress,
     permanentAddress: employee.permanentAddress,
-    emergencyName: employee.emergencyName,
-    emergencyRelationship: employee.emergencyRelationship,
-    emergencyMobile: employee.emergencyMobile,
-    emergencyAddress: employee.emergencyAddress,
-    documents: employee.documents.map((item) => ({
-      id: item.id,
-      type: item.type,
-      fileName: item.fileName,
-      mimeType: item.mimeType,
-      fileSize: item.fileSize,
-    })),
+    emergencyName: showSensitive ? employee.emergencyName : null,
+    emergencyRelationship: showSensitive ? employee.emergencyRelationship : null,
+    emergencyMobile: showSensitive ? employee.emergencyMobile : null,
+    emergencyAddress: showSensitive ? employee.emergencyAddress : null,
+    documents: showDocuments
+      ? employee.documents.map((item) => ({
+          id: item.id,
+          type: item.type,
+          fileName: item.fileName,
+          mimeType: item.mimeType,
+          fileSize: item.fileSize,
+        }))
+      : [],
+    canViewDocuments: showDocuments,
+    canManageDocuments: auth ? canManageEmployeeDocuments(auth) : false,
+    canViewSensitive: showSensitive,
     designation: namedRef(employee.designation),
     department: namedRef(employee.department),
     team: namedRef(employee.team),
@@ -364,6 +428,11 @@ function serializeEmployee(employee: EmployeeRecord) {
         }
       : null,
     joiningDate: dateOnly(employee.joiningDate),
+    resignationDate: employee.resignationDate ? dateOnly(employee.resignationDate) : null,
+    terminationDate: employee.terminationDate ? dateOnly(employee.terminationDate) : null,
+    terminationReason: showSensitive ? employee.terminationReason : null,
+    terminationRemarks: showSensitive ? employee.terminationRemarks : null,
+    rejoiningDate: employee.rejoiningDate ? dateOnly(employee.rejoiningDate) : null,
     crmAccess: crmAccess(employee.user),
     user: employee.user,
     createdAt: employee.createdAt,
@@ -423,7 +492,7 @@ export async function listEmployees(auth: AuthContext, query: EmployeeListQuery)
     include: employeeInclude,
     orderBy: [{ fullName: 'asc' }, { employeeCode: 'asc' }],
   })
-  return employees.map(serializeEmployee)
+  return employees.map((employee) => serializeEmployee(employee, auth))
 }
 
 export async function getEmployee(auth: AuthContext, id: string) {
@@ -435,7 +504,7 @@ export async function getEmployee(auth: AuthContext, id: string) {
   if (!employee) {
     throw httpError.notFound('Employee not found.')
   }
-  return serializeEmployee(employee)
+  return serializeEmployee(employee, auth)
 }
 
 export async function listEmployeeOptions(auth: AuthContext) {
@@ -651,7 +720,7 @@ export async function createEmployee(
           username: data.username,
           mobile: data.mobile,
           passwordHash,
-          status: data.userStatus,
+          status: 'INVITED',
           primaryRoleId: data.role.id,
           departmentId: data.departmentId,
           teamId: data.teamId,
@@ -673,13 +742,13 @@ export async function createEmployee(
           changedById: auth.user.id,
         },
       })
-      const requested = await requestPasswordReset({
-        identifier: data.officialEmail,
+      const invited = await sendAccountInvite({
+        userId: user.id,
         actorId: auth.user.id,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
       })
-      reset = requested.body
+      reset = invited.body
     }
 
     const photo = uploads.photo?.[0]
@@ -729,7 +798,7 @@ export async function createEmployee(
       },
     })
 
-    return { employee: serializeEmployee(employee), reset }
+    return { employee: serializeEmployee(employee, auth), reset }
   } catch (error) {
     await removeEmployeeFiles(employeeId)
     if (createdUserId) {
@@ -773,7 +842,7 @@ export async function updateEmployee(
           username: data.username,
           mobile: data.mobile,
           passwordHash,
-          status: data.userStatus,
+          status: 'INVITED',
           primaryRoleId: data.role.id,
           departmentId: data.departmentId,
           teamId: data.teamId,
@@ -795,22 +864,33 @@ export async function updateEmployee(
           changedById: auth.user.id,
         },
       })
-      const requested = await requestPasswordReset({
-        identifier: data.officialEmail,
+      const invited = await sendAccountInvite({
+        userId: user.id,
         actorId: auth.user.id,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
       })
-      reset = requested.body
+      reset = invited.body
     } else if (current.userId && data.role) {
+      const nextStatus =
+        current.user?.status === 'INVITED' && data.userStatus === 'ACTIVE'
+          ? 'INVITED'
+          : data.userStatus
+      const nextEmail = normalizeEmail(data.officialEmail)
+      const emailChanged = nextEmail !== normalizeEmail(current.officialEmail)
+      if (emailChanged && current.user?.status !== 'INVITED') {
+        throw httpError.badRequest(
+          'Official email can only be changed while the CRM account is still invited.',
+        )
+      }
       await prisma.user.update({
         where: { id: current.userId },
         data: {
           fullName: data.fullName,
-          email: data.officialEmail,
+          email: nextEmail,
           username: data.username,
           mobile: data.mobile,
-          status: data.userStatus,
+          status: nextStatus,
           primaryRoleId: data.role.id,
           departmentId: data.departmentId,
           teamId: data.teamId,
@@ -861,6 +941,22 @@ export async function updateEmployee(
       },
       include: employeeInclude,
     })
+
+    const invitedEmailChanged =
+      Boolean(current.userId) &&
+      current.user?.status === 'INVITED' &&
+      normalizeEmail(data.officialEmail) !== normalizeEmail(current.officialEmail)
+    if (invitedEmailChanged && current.userId) {
+      const invited = await sendAccountInvite({
+        userId: current.userId,
+        actorId: auth.user.id,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+        resent: true,
+      })
+      reset = invited.body
+    }
+
     await writeAuditLog({
       userId: auth.user.id,
       action: 'EMPLOYEE_UPDATED',
@@ -870,7 +966,7 @@ export async function updateEmployee(
       userAgent: meta.userAgent,
       metadata: { employeeCode: employee.employeeCode, crmAccount: Boolean(employee.userId) },
     })
-    return { employee: serializeEmployee(employee), reset }
+    return { employee: serializeEmployee(employee, auth), reset }
   } catch (error) {
     if (createdUserId) {
       await prisma.user.delete({ where: { id: createdUserId } }).catch(() => undefined)
@@ -882,14 +978,21 @@ export async function updateEmployee(
 export async function updateEmployeeStatus(
   auth: AuthContext,
   id: string,
-  input: { employmentStatusId?: unknown; status?: unknown },
+  input: Record<string, unknown>,
   meta: AuditMeta,
 ) {
   await assertCanViewEmployee(auth, id)
+  const fields: Record<string, string> = {}
+  const quickStatus = asString(input.status).toUpperCase()
   const status =
-    input.status === 'ACTIVE' || input.status === 'INACTIVE'
-      ? await employmentStatusByCode(input.status)
+    quickStatus === 'ACTIVE' || quickStatus === 'INACTIVE'
+      ? await employmentStatusByCode(quickStatus)
       : await resolveMasterData('EMPLOYMENT_STATUS', input.employmentStatusId, 'Employment status')
+
+  if (!status) {
+    throw httpError.badRequest('Employment status is required.')
+  }
+
   const current = await prisma.employee.findUnique({
     where: { id },
     include: { employmentStatus: true },
@@ -898,11 +1001,63 @@ export async function updateEmployeeStatus(
     throw httpError.notFound('Employee not found.')
   }
 
+  const statusCode = (status.code || '').toUpperCase()
+  const previousCode = (current.employmentStatus.code || '').toUpperCase()
+  const wasAway = ['RESIGNED', 'TERMINATED', 'INACTIVE'].includes(previousCode)
+  const isRejoining = wasAway && (statusCode === 'ACTIVE' || statusCode === 'PROBATION')
+
+  const resignationDate = parseDateOnly(input.resignationDate, 'Resignation date', false, fields, 'resignationDate')
+  const terminationDate = parseDateOnly(input.terminationDate, 'Termination date', false, fields, 'terminationDate')
+  const rejoiningDate = parseDateOnly(input.rejoiningDate, 'Rejoining date', false, fields, 'rejoiningDate')
+  const terminationReason = asOptionalString(input.terminationReason, 200)
+  const terminationRemarks = asOptionalString(input.terminationRemarks, 1000)
+
+  if (statusCode === 'RESIGNED' && !resignationDate && !current.resignationDate) {
+    fields.resignationDate = 'Resignation date is required when status is Resigned.'
+  }
+  if (statusCode === 'TERMINATED') {
+    if (!terminationDate && !current.terminationDate) {
+      fields.terminationDate = 'Termination date is required when status is Terminated.'
+    }
+    if (!terminationReason && !current.terminationReason) {
+      fields.terminationReason = 'Termination reason is required when status is Terminated.'
+    }
+  }
+  if (isRejoining && !rejoiningDate) {
+    fields.rejoiningDate = 'Rejoining date is required when reactivating a previous employee.'
+  }
+  throwIfInvalid(fields)
+
+  const data: Prisma.EmployeeUpdateInput = {
+    employmentStatus: { connect: { id: status.id } },
+  }
+
+  if (statusCode === 'RESIGNED') {
+    data.resignationDate = resignationDate || current.resignationDate
+    data.terminationDate = null
+    data.terminationReason = null
+    data.terminationRemarks = null
+  } else if (statusCode === 'TERMINATED') {
+    data.terminationDate = terminationDate || current.terminationDate
+    data.terminationReason = terminationReason || current.terminationReason
+    data.terminationRemarks = terminationRemarks ?? current.terminationRemarks
+    data.resignationDate = null
+  } else if (isRejoining) {
+    data.rejoiningDate = rejoiningDate
+  }
+
   const employee = await prisma.employee.update({
     where: { id },
-    data: { employmentStatusId: status!.id },
+    data,
     include: employeeInclude,
   })
+
+  const crmSync = await syncCrmAccountForEmploymentStatus(employee, statusCode)
+  const refreshed = await prisma.employee.findUnique({
+    where: { id },
+    include: employeeInclude,
+  })
+
   await writeAuditLog({
     userId: auth.user.id,
     action: 'EMPLOYEE_STATUS_CHANGED',
@@ -914,9 +1069,16 @@ export async function updateEmployeeStatus(
       employeeCode: employee.employeeCode,
       fromStatus: current.employmentStatus.name,
       toStatus: employee.employmentStatus.name,
+      fromStatusCode: previousCode,
+      toStatusCode: statusCode,
+      resignationDate: employee.resignationDate ? dateOnly(employee.resignationDate) : null,
+      terminationDate: employee.terminationDate ? dateOnly(employee.terminationDate) : null,
+      rejoiningDate: employee.rejoiningDate ? dateOnly(employee.rejoiningDate) : null,
+      crmDisabled: crmSync.crmDisabled,
+      crmRestored: crmSync.crmRestored,
     },
   })
-  return serializeEmployee(employee)
+  return serializeEmployee(refreshed ?? employee, auth)
 }
 
 export async function updateEmployeePhoto(
@@ -953,7 +1115,7 @@ export async function updateEmployeePhoto(
     userAgent: meta.userAgent,
     metadata: { employeeCode: employee.employeeCode },
   })
-  return serializeEmployee(employee)
+  return serializeEmployee(employee, auth)
 }
 
 export async function getEmployeePhoto(auth: AuthContext, id: string) {
@@ -971,6 +1133,16 @@ export async function getEmployeePhoto(auth: AuthContext, id: string) {
 
 export async function getEmployeeDocumentFile(auth: AuthContext, employeeId: string, documentId: string) {
   await assertCanViewEmployee(auth, employeeId)
+  const owner = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: { userId: true },
+  })
+  if (!owner) {
+    throw httpError.notFound('Employee not found.')
+  }
+  if (!canViewEmployeeDocuments(auth, owner.userId)) {
+    throw httpError.accessDenied()
+  }
   const document = await prisma.employeeDocument.findFirst({
     where: { id: documentId, employeeId },
   })
@@ -987,6 +1159,9 @@ export async function uploadEmployeeDocument(
   uploads: EmployeeUploads,
   meta: AuditMeta,
 ) {
+  if (!canManageEmployeeDocuments(auth)) {
+    throw httpError.accessDenied()
+  }
   await assertCanViewEmployee(auth, id)
   const current = await prisma.employee.findUnique({
     where: { id },
@@ -1052,7 +1227,7 @@ export async function uploadEmployeeDocument(
     where: { id },
     include: employeeInclude,
   })
-  return serializeEmployee(refreshed ?? employee)
+  return serializeEmployee(refreshed ?? employee, auth)
 }
 
 export async function deleteEmployeeDocument(
@@ -1061,6 +1236,9 @@ export async function deleteEmployeeDocument(
   documentId: string,
   meta: AuditMeta,
 ) {
+  if (!canManageEmployeeDocuments(auth)) {
+    throw httpError.accessDenied()
+  }
   await assertCanViewEmployee(auth, employeeId)
   const document = await prisma.employeeDocument.findFirst({
     where: { id: documentId, employeeId },
@@ -1089,5 +1267,97 @@ export async function deleteEmployeeDocument(
     userAgent: meta.userAgent,
     metadata: { employeeCode: employee.employeeCode, type: document.type, fileName: document.fileName },
   })
-  return serializeEmployee(employee)
+  return serializeEmployee(employee, auth)
+}
+
+export async function listEmployeeAuditLogs(auth: AuthContext, employeeId: string) {
+  await assertCanViewEmployee(auth, employeeId)
+  if (!hasPermission(auth.permissions, ['audit:view', 'employee:edit', 'employee:view'])) {
+    throw httpError.accessDenied()
+  }
+
+  const logs = await prisma.auditLog.findMany({
+    where: { entityType: ENTITY, entityId: employeeId },
+    include: { user: { select: { id: true, fullName: true, email: true } } },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+  })
+
+  return logs.map((log) => ({
+    id: log.id,
+    action: log.action,
+    entityType: log.entityType,
+    entityId: log.entityId,
+    metadata: log.metadata,
+    createdAt: log.createdAt,
+    user: log.user,
+  }))
+}
+
+export async function getEmployeePerformanceSummary(auth: AuthContext, employeeId: string) {
+  await assertCanViewEmployee(auth, employeeId)
+  if (!hasPermission(auth.permissions, 'employee_performance:view')) {
+    throw httpError.accessDenied()
+  }
+
+  const employee = await prisma.employee.findUnique({
+    where: { id: employeeId },
+    select: {
+      id: true,
+      employeeCode: true,
+      fullName: true,
+      userId: true,
+    },
+  })
+  if (!employee) {
+    throw httpError.notFound('Employee not found.')
+  }
+
+  if (!employee.userId) {
+    return {
+      employee: {
+        id: employee.id,
+        employeeCode: employee.employeeCode,
+        fullName: employee.fullName,
+        userId: null,
+      },
+      available: false,
+      message: 'This employee has no CRM account, so performance metrics are not available yet.',
+      summary: null,
+      row: null,
+    }
+  }
+
+  const performance = await getFollowUpPerformance(auth, { ownerId: employee.userId })
+  const row = performance.employees.find((item) => item.ownerId === employee.userId) || null
+
+  return {
+    employee: {
+      id: employee.id,
+      employeeCode: employee.employeeCode,
+      fullName: employee.fullName,
+      userId: employee.userId,
+    },
+    available: true,
+    from: performance.from,
+    to: performance.to,
+    summary: row
+      ? {
+          due: row.due,
+          completed: row.completed,
+          onTime: row.onTime,
+          overdue: row.overdue,
+          completionRate: row.completionRate,
+          onTimeRate: row.onTimeRate,
+        }
+      : {
+          due: 0,
+          completed: 0,
+          onTime: 0,
+          overdue: 0,
+          completionRate: 0,
+          onTimeRate: 0,
+        },
+    row,
+  }
 }
