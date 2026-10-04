@@ -167,7 +167,33 @@ function activityDetails(row: {
   return row.notes || `${label} on ${name}`
 }
 
+function isOfferAction(action: string) {
+  return action.startsWith('SERVICE_OFFER_')
+}
+
+function offerAuditDetails(action: string, metadata: Record<string, unknown> | null) {
+  const version = metadata?.offerVersion ? `Offer V${stringify(metadata.offerVersion)}` : 'Service offer'
+  const from = stringify(metadata?.from)
+  const to = stringify(metadata?.to)
+  const reason = stringify(metadata?.reason)
+  const amount = stringify(metadata?.finalPayable)
+  const suffix = reason ? ` — ${reason}` : ''
+  if (action === 'SERVICE_OFFER_STATUS_CHANGED' && from && to) return `${version}: ${from} → ${to}${suffix}`
+  if (action === 'SERVICE_OFFER_CREATED') return `${version} created as Draft · BDT ${amount}`
+  if (action === 'SERVICE_OFFER_REVISED') {
+    const previous = metadata?.revisedFromVersion ? ` from Offer V${stringify(metadata.revisedFromVersion)}` : ''
+    return `${version} created as a revision${previous} · BDT ${amount}${suffix}`
+  }
+  if (action === 'SERVICE_OFFER_UPDATED') return `${version} updated · BDT ${stringify(metadata?.previousFinalPayable)} → BDT ${amount}`
+  if (action === 'SERVICE_OFFER_PAYMENT_RECORDED') {
+    return `${version}: payment ${stringify(metadata?.installmentSequence)} received · BDT ${stringify(metadata?.amount)}`
+  }
+  if (action === 'SERVICE_OFFER_DELETED') return `${version} draft deleted`
+  return `${humanize(action)} · ${version}`
+}
+
 function classifyAudit(action: string, entityType: string | null): FeedCategory {
+  if (isOfferAction(action)) return action === 'SERVICE_OFFER_PAYMENT_RECORDED' ? 'payment' : 'counselling'
   const text = `${action} ${entityType || ''}`.toLowerCase()
   if (text.includes('document') || text.includes('verif')) return 'document'
   if (text.includes('payment') || text.includes('receipt') || text.includes('discount')) return 'payment'
@@ -178,6 +204,7 @@ function classifyAudit(action: string, entityType: string | null): FeedCategory 
 }
 
 function auditActionLabel(category: FeedCategory, action: string) {
+  if (isOfferAction(action)) return category === 'payment' ? 'Payment' : 'Service Offer'
   if (category === 'document') return 'Document'
   if (category === 'payment') return 'Payment'
   if (category === 'assignment') return 'Assignment'
@@ -392,8 +419,10 @@ export async function listActivityFeed(
         category,
         action: auditActionLabel(category, row.action),
         actionKey: row.action,
-        module: auditModule(category, row.entityType),
-        details: auditDetails(row.action, row.entityType, row.entityId, metadata),
+        module: isOfferAction(row.action) ? 'Service Offers' : auditModule(category, row.entityType),
+        details: isOfferAction(row.action)
+          ? offerAuditDetails(row.action, metadata)
+          : auditDetails(row.action, row.entityType, row.entityId, metadata),
         relatedName: stringify(metadata?.relatedName || metadata?.name || metadata?.fullName) || null,
         relatedType: row.entityType,
         relatedId: row.entityId,

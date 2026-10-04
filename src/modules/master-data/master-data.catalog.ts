@@ -1,6 +1,6 @@
 export type MasterDataStorage = 'generic' | 'department' | 'team'
 export type MasterDataCodePolicy = 'optional' | 'recommended' | 'required'
-export type MasterDataExtraFields = 'none' | 'intake' | 'leadStatus'
+export type MasterDataExtraFields = 'none' | 'intake' | 'leadStatus' | 'country'
 
 export type MasterDataCategory = {
   key: string
@@ -50,7 +50,7 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
   { key: 'ENGLISH_TEST_TYPE', name: 'English Test Type', group: 'Academic', storage: 'generic', codePolicy: 'recommended', extraFields: 'none' },
   { key: 'TEST_STATUS', name: 'Test Status', group: 'Academic', storage: 'generic', codePolicy: 'recommended', extraFields: 'none' },
   { key: 'ENGLISH_PROFICIENCY_LEVEL', name: 'English Proficiency Level', group: 'Academic', storage: 'generic', codePolicy: 'recommended', extraFields: 'none' },
-  { key: 'COUNTRY', name: 'Country', group: 'Study Abroad', storage: 'generic', codePolicy: 'required', extraFields: 'none' },
+  { key: 'COUNTRY', name: 'Country', group: 'Study Abroad', storage: 'generic', codePolicy: 'required', extraFields: 'country' },
   { key: 'STATE_PROVINCE', name: 'State/Province', group: 'Study Abroad', storage: 'generic', codePolicy: 'recommended', parentCategoryKey: 'COUNTRY', extraFields: 'none' },
   { key: 'CITY', name: 'City', group: 'Study Abroad', storage: 'generic', codePolicy: 'recommended', parentCategoryKey: 'STATE_PROVINCE', extraFields: 'none' },
   { key: 'INTAKE', name: 'Intake', group: 'Study Abroad', storage: 'generic', codePolicy: 'recommended', extraFields: 'intake' },
@@ -240,9 +240,9 @@ export const MASTER_DATA_SEEDS: MasterDataSeed[] = [
   { categoryKey: 'ENGLISH_PROFICIENCY_LEVEL', name: 'IELTS 6.0', code: 'IELTS_60', sortOrder: 4 },
   { categoryKey: 'ENGLISH_PROFICIENCY_LEVEL', name: 'IELTS 6.5', code: 'IELTS_65', sortOrder: 5 },
   { categoryKey: 'ENGLISH_PROFICIENCY_LEVEL', name: 'IELTS 7.0', code: 'IELTS_70', sortOrder: 6 },
-  { categoryKey: 'COUNTRY', name: 'Canada', code: 'CA', sortOrder: 1 },
-  { categoryKey: 'COUNTRY', name: 'United Kingdom', code: 'UK', sortOrder: 2 },
-  { categoryKey: 'COUNTRY', name: 'Australia', code: 'AU', sortOrder: 3 },
+  { categoryKey: 'COUNTRY', name: 'Canada', code: 'CA', sortOrder: 1, extras: { fileOpeningCharge: '2000.00' } },
+  { categoryKey: 'COUNTRY', name: 'United Kingdom', code: 'UK', sortOrder: 2, extras: { fileOpeningCharge: '1500.00' } },
+  { categoryKey: 'COUNTRY', name: 'Australia', code: 'AU', sortOrder: 3, extras: { fileOpeningCharge: '2500.00' } },
   { categoryKey: 'COUNTRY', name: 'USA', code: 'US', sortOrder: 4 },
   { categoryKey: 'COUNTRY', name: 'Germany', code: 'DE', sortOrder: 5 },
   { categoryKey: 'STATE_PROVINCE', name: 'Ontario', code: 'ON', sortOrder: 1, parentCode: 'CA' },
