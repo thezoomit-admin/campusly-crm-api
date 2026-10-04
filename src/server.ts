@@ -2,12 +2,14 @@ import { Server } from 'http'
 import app from './app'
 import { config } from './config'
 import { startFollowUpJobs } from './jobs/follow-up-jobs'
+import { startOfferExpiryJob } from './jobs/offer-expiry'
 import { prisma } from './lib/prisma'
 import { ensureLeadAttribution } from './modules/leads/lead-attribution'
 
 const PORT = config.port
 let server: Server | undefined
 let followUpJobTimer: ReturnType<typeof setInterval> | undefined
+let offerExpiryTimer: ReturnType<typeof setInterval> | undefined
 
 const gracefulShutdown = (signal: string) => {
   console.log(`\n🛑 ${signal} received. Starting graceful shutdown...`)
@@ -15,6 +17,10 @@ const gracefulShutdown = (signal: string) => {
   if (followUpJobTimer) {
     clearInterval(followUpJobTimer)
     followUpJobTimer = undefined
+  }
+  if (offerExpiryTimer) {
+    clearInterval(offerExpiryTimer)
+    offerExpiryTimer = undefined
   }
 
   if (server) {
@@ -75,6 +81,7 @@ async function bootstrap() {
       console.log('─'.repeat(60))
       followUpJobTimer = startFollowUpJobs()
       console.log('⏱️  Follow-up jobs started (overdue + reminders, every 2 min)')
+      offerExpiryTimer = startOfferExpiryJob()
     })
   } catch (error) {
     console.error('❌ Failed to start server:', error)

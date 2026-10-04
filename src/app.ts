@@ -28,6 +28,8 @@ import { whatsappWebhookRouter } from './modules/whatsapp/whatsapp.webhook'
 import { emailRouter } from './modules/email/email.routes'
 import { metaLeadsRouter } from './modules/meta-leads/meta-leads.routes'
 import { serviceItemsRouter } from './modules/service-items/service-items.routes'
+import { packagesRouter } from './modules/packages/packages.routes'
+import { serviceOffersRouter } from './modules/packages/service-offers.routes'
 
 export function createApp() {
   const app = express()
@@ -71,6 +73,8 @@ export function createApp() {
   app.use('/api/permissions', permissionsRouter)
   app.use('/api/master-data', masterDataRouter)
   app.use('/api/service-items', serviceItemsRouter)
+  app.use('/api/packages', packagesRouter)
+  app.use('/api/leads/:leadId/service-offers', serviceOffersRouter)
   app.use('/api/audit-logs', auditRouter)
   app.use('/api/activities', activitiesRouter)
   app.use('/api/leads', leadsRouter)

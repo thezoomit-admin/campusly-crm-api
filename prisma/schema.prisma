@@ -21,6 +21,11 @@ enum RecordStatus {
   INACTIVE
 }
 
+enum PackageItemInclusion {
+  INCLUDED
+  OPTIONAL
+}
+
 enum DataScope {
   OWN
   TEAM
@@ -165,6 +170,17 @@ model User {
   emailMessagesSent    EmailMessage[]        @relation("EmailMessageSender")
   serviceItemsCreated  ServiceItem[]         @relation("ServiceItemCreatedBy")
   serviceItemsUpdated  ServiceItem[]         @relation("ServiceItemUpdatedBy")
+  packagesCreated      Package[]             @relation("PackageCreatedBy")
+  packagesUpdated      Package[]             @relation("PackageUpdatedBy")
+  packageVersionsCreated PackageVersion[]    @relation("PackageVersionCreatedBy")
+  serviceOffersCreated ServiceOffer[]        @relation("ServiceOfferCreatedBy")
+  serviceOffersUpdated ServiceOffer[]        @relation("ServiceOfferUpdatedBy")
+  serviceOffersGenerated ServiceOffer[]      @relation("ServiceOfferGeneratedBy")
+  serviceOffersSent    ServiceOffer[]        @relation("ServiceOfferSentBy")
+  serviceOffersAccepted ServiceOffer[]       @relation("ServiceOfferAcceptedBy")
+  serviceOffersCancelled ServiceOffer[]      @relation("ServiceOfferCancelledBy")
+  serviceOfferStatusChanges ServiceOfferStatusHistory[] @relation("ServiceOfferStatusChangedBy")
+  serviceOfferPaymentsRecorded ServiceOfferInstallment[] @relation("ServiceOfferInstallmentPaidBy")
 
   @@index([primaryRoleId])
   @@index([departmentId])
@@ -332,6 +348,7 @@ model MasterDataItem {
   employmentStatusEmployees Employee[] @relation("EmployeeEmploymentStatus")
   categorizedServiceItems   ServiceItem[]        @relation("ServiceItemCategory")
   scopedServiceItems        ServiceItemCountry[] @relation("ServiceItemCountryMaster")
+  packages                  Package[]            @relation("PackageCountry")
 
   @@unique([categoryKey, nameNormalized])
   @@unique([categoryKey, code])
@@ -353,10 +370,12 @@ model ServiceItem {
   updatedById    String?              @map("updated_by_id") @db.Uuid
   createdAt      DateTime             @default(now()) @map("created_at")
   updatedAt      DateTime             @default(now()) @updatedAt @map("updated_at")
-  category       MasterDataItem       @relation("ServiceItemCategory", fields: [categoryId], references: [id], onDelete: Restrict)
-  countries      ServiceItemCountry[]
-  createdBy      User?                @relation("ServiceItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy      User?                @relation("ServiceItemUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  category            MasterDataItem       @relation("ServiceItemCategory", fields: [categoryId], references: [id], onDelete: Restrict)
+  countries           ServiceItemCountry[]
+  packageVersionItems PackageVersionItem[]
+  offerItems          ServiceOfferItem[]
+  createdBy           User?                @relation("ServiceItemCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy           User?                @relation("ServiceItemUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@index([categoryId, status])
   @@index([status, name])
@@ -372,6 +391,219 @@ model ServiceItemCountry {
   @@id([serviceItemId, countryId])
   @@index([countryId])
   @@map("service_item_countries")
+}
+
+model Package {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String
+  nameNormalized   String           @unique @map("name_normalized")
+  description      String?          @db.Text
+  countryId        String?          @map("country_id") @db.Uuid
+  status           RecordStatus     @default(ACTIVE)
+  currentVersionId String?          @unique @map("current_version_id") @db.Uuid
+  createdById      String?          @map("created_by_id") @db.Uuid
+  updatedById      String?          @map("updated_by_id") @db.Uuid
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @default(now()) @updatedAt @map("updated_at")
+  country          MasterDataItem?  @relation("PackageCountry", fields: [countryId], references: [id], onDelete: Restrict)
+  currentVersion   PackageVersion?  @relation("PackageCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  versions         PackageVersion[] @relation("PackageVersions")
+  offers           ServiceOffer[]
+  createdBy        User?            @relation("PackageCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy        User?            @relation("PackageUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([status, name])
+  @@index([countryId])
+  @@map("packages")
+}
+
+model PackageVersion {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  packageId       String               @map("package_id") @db.Uuid
+  versionNumber   Int                  @map("version_number")
+  price           Decimal              @db.Decimal(14, 2)
+  individualTotal Decimal              @map("individual_total") @db.Decimal(14, 2)
+  saving          Decimal              @db.Decimal(14, 2)
+  createdById     String?              @map("created_by_id") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at")
+  package         Package              @relation("PackageVersions", fields: [packageId], references: [id], onDelete: Cascade)
+  currentFor      Package?             @relation("PackageCurrentVersion")
+  items           PackageVersionItem[]
+  offers          ServiceOffer[]
+  createdBy       User?                @relation("PackageVersionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([packageId, versionNumber])
+  @@index([packageId, createdAt])
+  @@map("package_versions")
+}
+
+model PackageVersionItem {
+  id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  packageVersionId String               @map("package_version_id") @db.Uuid
+  serviceItemId    String               @map("service_item_id") @db.Uuid
+  inclusion        PackageItemInclusion
+  unitPrice        Decimal              @map("unit_price") @db.Decimal(14, 2)
+  sortOrder        Int                  @default(0) @map("sort_order")
+  packageVersion   PackageVersion       @relation(fields: [packageVersionId], references: [id], onDelete: Cascade)
+  serviceItem      ServiceItem          @relation(fields: [serviceItemId], references: [id], onDelete: Restrict)
+
+  @@unique([packageVersionId, serviceItemId])
+  @@index([serviceItemId])
+  @@map("package_version_items")
+}
+
+enum ServiceOfferStatus {
+  DRAFT
+  GENERATED
+  SENT
+  ACCEPTED
+  PAYMENT_PENDING
+  PARTIALLY_PAID
+  PAID
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum DiscountType {
+  AMOUNT
+  PERCENTAGE
+}
+
+enum OfferLineKind {
+  PACKAGE_INCLUDED
+  PACKAGE_OPTIONAL
+  SERVICE
+  ADDITIONAL
+  CUSTOM_SERVICE
+  CUSTOM_CHARGE
+}
+
+model ServiceOffer {
+  id                     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId                 String             @map("lead_id") @db.Uuid
+  status                 ServiceOfferStatus @default(DRAFT)
+  sourcePackageId        String?            @map("source_package_id") @db.Uuid
+  sourcePackageVersionId String?            @map("source_package_version_id") @db.Uuid
+  packageName            String?            @map("package_name")
+  versionNumber          Int?               @map("version_number")
+  packageDefaultPrice    Decimal?           @map("package_default_price") @db.Decimal(14, 2)
+  packagePrice           Decimal?           @map("package_price") @db.Decimal(14, 2)
+  individualTotal        Decimal            @default(0) @map("individual_total") @db.Decimal(14, 2)
+  saving                 Decimal            @default(0) @db.Decimal(14, 2)
+  fileOpeningDefault     Decimal?           @map("file_opening_default") @db.Decimal(14, 2)
+  fileOpeningCharge      Decimal            @default(0) @map("file_opening_charge") @db.Decimal(14, 2)
+  grossTotal             Decimal            @default(0) @map("gross_total") @db.Decimal(14, 2)
+  lineDiscountTotal      Decimal            @default(0) @map("line_discount_total") @db.Decimal(14, 2)
+  subtotal               Decimal            @default(0) @db.Decimal(14, 2)
+  overallDiscountType    DiscountType?      @map("overall_discount_type")
+  overallDiscountValue   Decimal?           @map("overall_discount_value") @db.Decimal(14, 2)
+  overallDiscountAmount  Decimal            @default(0) @map("overall_discount_amount") @db.Decimal(14, 2)
+  overallDiscountReason  String?            @map("overall_discount_reason") @db.Text
+  finalPayable           Decimal            @map("final_price") @db.Decimal(14, 2)
+  expectedDealValue      Decimal?           @map("expected_deal_value") @db.Decimal(14, 2)
+  initialPayment         Decimal?           @map("initial_payment") @db.Decimal(14, 2)
+  generatedAt            DateTime?          @map("generated_at")
+  generatedById          String?            @map("generated_by_id") @db.Uuid
+  offerVersion           Int                @default(1) @map("offer_version")
+  revisedFromId          String?            @map("revised_from_id") @db.Uuid
+  sentAt                 DateTime?          @map("sent_at")
+  sentById               String?            @map("sent_by_id") @db.Uuid
+  validUntil             DateTime?          @map("valid_until")
+  acceptedAt             DateTime?          @map("accepted_at")
+  acceptedById           String?            @map("accepted_by_id") @db.Uuid
+  /// Version, total, and selected services captured at the moment of acceptance.
+  acceptedSnapshot       Json?              @map("accepted_snapshot")
+  rejectedAt             DateTime?          @map("rejected_at")
+  rejectionReason        String?            @map("rejection_reason") @db.Text
+  cancelledAt            DateTime?          @map("cancelled_at")
+  cancelledById          String?            @map("cancelled_by_id") @db.Uuid
+  cancelReason           String?            @map("cancel_reason") @db.Text
+  createdById            String?            @map("created_by_id") @db.Uuid
+  updatedById            String?            @map("updated_by_id") @db.Uuid
+  createdAt              DateTime           @default(now()) @map("created_at")
+  updatedAt              DateTime           @default(now()) @updatedAt @map("updated_at")
+  lead                   Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  sourcePackage          Package?           @relation(fields: [sourcePackageId], references: [id], onDelete: SetNull)
+  sourceVersion          PackageVersion?    @relation(fields: [sourcePackageVersionId], references: [id], onDelete: Restrict)
+  items                  ServiceOfferItem[]
+  installments           ServiceOfferInstallment[]
+  generatedBy            User?              @relation("ServiceOfferGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+  createdBy              User?              @relation("ServiceOfferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy              User?              @relation("ServiceOfferUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  sentBy                 User?              @relation("ServiceOfferSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  acceptedBy             User?              @relation("ServiceOfferAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+  cancelledBy            User?              @relation("ServiceOfferCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  revisedFrom            ServiceOffer?      @relation("ServiceOfferRevision", fields: [revisedFromId], references: [id], onDelete: Restrict)
+  revisions              ServiceOffer[]     @relation("ServiceOfferRevision")
+  statusHistory          ServiceOfferStatusHistory[]
+
+  @@unique([leadId, offerVersion])
+  @@index([leadId, createdAt])
+  @@index([leadId, status])
+  @@index([status, validUntil])
+  @@index([sourcePackageVersionId])
+  @@map("service_offers")
+}
+
+model ServiceOfferStatusHistory {
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serviceOfferId String              @map("service_offer_id") @db.Uuid
+  fromStatus     ServiceOfferStatus? @map("from_status")
+  toStatus       ServiceOfferStatus  @map("to_status")
+  reason         String?             @db.Text
+  changedById    String?             @map("changed_by_id") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at")
+  serviceOffer   ServiceOffer        @relation(fields: [serviceOfferId], references: [id], onDelete: Cascade)
+  changedBy      User?               @relation("ServiceOfferStatusChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([serviceOfferId, createdAt])
+  @@map("service_offer_status_history")
+}
+
+model ServiceOfferItem {
+  id             String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serviceOfferId String                @map("service_offer_id") @db.Uuid
+  kind           OfferLineKind         @default(PACKAGE_INCLUDED)
+  serviceItemId  String?               @map("service_item_id") @db.Uuid
+  serviceName    String                @map("service_name")
+  remarks        String?               @db.Text
+  inclusion      PackageItemInclusion?
+  selected       Boolean               @default(true)
+  defaultPrice   Decimal?              @map("default_price") @db.Decimal(14, 2)
+  offeredPrice   Decimal               @map("unit_price") @db.Decimal(14, 2)
+  quantity       Int                   @default(1)
+  discountType   DiscountType?         @map("discount_type")
+  discountValue  Decimal?              @map("discount_value") @db.Decimal(14, 2)
+  discountAmount Decimal               @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  discountReason String?               @map("discount_reason") @db.Text
+  lineTotal      Decimal               @default(0) @map("line_total") @db.Decimal(14, 2)
+  sortOrder      Int                   @default(0) @map("sort_order")
+  serviceOffer   ServiceOffer          @relation(fields: [serviceOfferId], references: [id], onDelete: Cascade)
+  serviceItem    ServiceItem?          @relation(fields: [serviceItemId], references: [id], onDelete: Restrict)
+
+  @@unique([serviceOfferId, serviceItemId])
+  @@index([serviceItemId])
+  @@map("service_offer_items")
+}
+
+model ServiceOfferInstallment {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serviceOfferId String       @map("service_offer_id") @db.Uuid
+  sequence       Int
+  amount         Decimal      @db.Decimal(14, 2)
+  purpose        String
+  dueDate        DateTime?    @map("due_date") @db.Date
+  status         String       @default("PENDING")
+  paidAt         DateTime?    @map("paid_at")
+  paidById       String?      @map("paid_by_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
+  serviceOffer   ServiceOffer @relation(fields: [serviceOfferId], references: [id], onDelete: Cascade)
+  paidBy         User?        @relation("ServiceOfferInstallmentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+
+  @@unique([serviceOfferId, sequence])
+  @@map("service_offer_installments")
 }
 
 model AuditLog {
@@ -619,6 +851,7 @@ model Lead {
   attributionChanges  LeadAttributionChange[]
   whatsappConversations WhatsAppConversation[]
   emailThreads        EmailThread[]
+  serviceOffers       ServiceOffer[]
 
   @@index([status])
   @@index([ownerId])

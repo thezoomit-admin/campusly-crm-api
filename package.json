@@ -15,7 +15,9 @@
     "studio": "node scripts/prisma-with-env.cjs studio",
     "build": "tsc",
     "validate": "node scripts/prisma-with-env.cjs validate",
-    "seed": "ts-node --transpile-only prisma/seed.ts"
+    "seed": "ts-node --transpile-only prisma/seed.ts",
+    "backfill:offers": "ts-node --transpile-only scripts/backfill-service-offers.ts",
+    "prepare:offer-versions": "ts-node --transpile-only scripts/prepare-offer-versions.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.16.2",

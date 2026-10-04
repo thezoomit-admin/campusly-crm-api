@@ -117,6 +117,15 @@ function parseBehaviorKey(value: unknown, extraFields: MasterDataCategory['extra
 }
 
 function parseExtras(input: Record<string, unknown>, extraFields: MasterDataCategory['extraFields']) {
+  if (extraFields === 'country') {
+    const raw = input.fileOpeningCharge
+    if (raw == null || raw === '') return { fileOpeningCharge: null }
+    const text = String(raw).trim()
+    if (!/^\d+(\.\d{1,2})?$/.test(text) || Number(text) > 999999999999.99) {
+      throw httpError.invalidMasterData()
+    }
+    return { fileOpeningCharge: Number(text).toFixed(2) }
+  }
   if (extraFields !== 'intake') {
     return null
   }
@@ -660,6 +669,8 @@ function parseInput(category: MasterDataCategory, input: Record<string, unknown>
   const extrasInput = {
     startDate: input.startDate ?? existing?.extras?.startDate,
     endDate: input.endDate ?? existing?.extras?.endDate,
+    fileOpeningCharge:
+      input.fileOpeningCharge === undefined ? existing?.extras?.fileOpeningCharge : input.fileOpeningCharge,
   }
   const description =
     typeof input.description === 'string' ? input.description.trim() || null : (existing?.description ?? null)
@@ -780,6 +791,8 @@ export async function updateItem(
       behaviorKey: input.behaviorKey === undefined ? existing.behaviorKey : input.behaviorKey,
       startDate: input.startDate === undefined ? existing.extras?.startDate : input.startDate,
       endDate: input.endDate === undefined ? existing.extras?.endDate : input.endDate,
+      fileOpeningCharge:
+        input.fileOpeningCharge === undefined ? existing.extras?.fileOpeningCharge : input.fileOpeningCharge,
     },
     existing,
   )
