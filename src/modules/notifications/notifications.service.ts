@@ -107,6 +107,36 @@ export async function markAllNotificationsRead(auth: AuthContext) {
   return { ok: true }
 }
 
+export async function notifyCriticalPermissionChanges(input: {
+  userIds: string[]
+  actorName: string
+  changes: Array<{ label: string; from: string; to: string }>
+  roleName?: string
+}) {
+  const userIds = [...new Set(input.userIds.filter(Boolean))]
+  if (userIds.length === 0 || input.changes.length === 0) return
+
+  const shown = input.changes.slice(0, 8)
+  const summary = shown.map((change) => `${change.label} changed from ${change.from} to ${change.to}`).join('; ')
+  const extra = input.changes.length > shown.length ? ` and ${input.changes.length - shown.length} more` : ''
+  const body = input.roleName
+    ? `${input.actorName} changed the ${input.roleName} role: ${summary}${extra}.`
+    : `${input.actorName} changed your permissions: ${summary}${extra}.`
+
+  await Promise.all(
+    userIds.map((userId) =>
+      createNotification({
+        userId,
+        title: 'Critical permission change',
+        body,
+        type: 'permission_change',
+      }).catch((error) => {
+        console.error('Failed to send permission notification', error)
+      }),
+    ),
+  )
+}
+
 /** Fire due follow-up reminders as in-app notifications. */
 export async function dispatchDueReminders() {
   const now = new Date()

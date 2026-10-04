@@ -45,7 +45,7 @@ export const httpError = {
     return new HttpError(409, 'This username is already in use.', 'DUPLICATE_USERNAME')
   },
   duplicateEmail() {
-    return new HttpError(409, 'This email is already in use.', 'DUPLICATE_EMAIL')
+    return new HttpError(409, 'This email is already registered.', 'DUPLICATE_EMAIL')
   },
   duplicateLead(existingLead: { id: string; code: string; name: string; status: string }) {
     return new HttpError(409, 'Similar lead already exists.', 'DUPLICATE_LEAD', undefined, { existingLead })
@@ -68,8 +68,14 @@ export const httpError = {
   invalidPermission() {
     return new HttpError(400, 'The selected permission is not available.', 'INVALID_PERMISSION')
   },
-  roleInUse() {
-    return new HttpError(409, 'This role is currently assigned to users.', 'ROLE_IN_USE')
+  roleInUse(userCount: number) {
+    const assigned = userCount === 1 ? '1 user' : `${userCount} users`
+    const reassign = userCount === 1 ? 'this user' : 'these users'
+    return new HttpError(
+      409,
+      `This role is assigned to ${assigned}. Please reassign ${reassign} before deleting the role.`,
+      'ROLE_IN_USE',
+    )
   },
   cannotRemoveAccess() {
     return new HttpError(

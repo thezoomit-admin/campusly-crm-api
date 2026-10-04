@@ -178,7 +178,7 @@ export async function loadAuthFromToken(token: string | undefined): Promise<Auth
     return null
   }
 
-  if (!session.user.primaryRole || session.user.status !== 'ACTIVE') {
+  if (!session.user.primaryRole || session.user.status !== 'ACTIVE' || session.user.primaryRole.status !== 'ACTIVE') {
     return null
   }
 

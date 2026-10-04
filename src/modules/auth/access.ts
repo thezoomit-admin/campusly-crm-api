@@ -66,4 +66,56 @@ export function canReceiveLeadAssignment(status: string) {
   return status === 'ACTIVE'
 }
 
+export type DirectoryScope = 'OWN' | 'TEAM' | 'ALL'
+
+/** CRM-026 access matrix. Independent of lead data scope. */
+const USER_DIRECTORY_SCOPE: Record<string, DirectoryScope> = {
+  admin: 'ALL',
+  ceo: 'ALL',
+  manager: 'TEAM',
+}
+
+/** View Audit: Admin/CEO all, Manager team, Counsellor and Call Executive own. */
+const AUDIT_DIRECTORY_SCOPE: Record<string, DirectoryScope> = {
+  admin: 'ALL',
+  ceo: 'ALL',
+  manager: 'TEAM',
+  counsellor: 'OWN',
+  call_executive: 'OWN',
+}
+
+export function userDirectoryScope(roleKey: string): DirectoryScope {
+  return USER_DIRECTORY_SCOPE[roleKey] ?? 'OWN'
+}
+
+export function auditDirectoryScope(roleKey: string): DirectoryScope {
+  return AUDIT_DIRECTORY_SCOPE[roleKey] ?? 'OWN'
+}
+
+const CRITICAL_ACTIONS = new Set([
+  'delete',
+  'export',
+  'download',
+  'import',
+  'configure',
+  'convert',
+  'cancel',
+  'approve',
+  'generate',
+])
+
+export function isCriticalPermission(resource: string, action: string) {
+  return resource === 'payment' || resource === 'receipt' || CRITICAL_ACTIONS.has(action)
+}
+
+export function permissionLabel(resource: string, action: string) {
+  const title = (value: string) =>
+    value
+      .split('_')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+  return `${title(resource)} ${title(action)}`
+}
+
 export const SCOPE_RESOURCE_LIST = SCOPE_RESOURCES

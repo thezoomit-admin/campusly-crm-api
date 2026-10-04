@@ -1,6 +1,6 @@
 import type { Prisma } from '../../lib/prisma-client'
 import { prisma } from '../../lib/prisma'
-import { hasPermission } from '../auth/access'
+import { auditDirectoryScope, hasPermission, userDirectoryScope } from '../auth/access'
 import type { AuthContext } from '../auth/session.service'
 import { MASTER_DATA_CATEGORY_MAP } from '../master-data/master-data.catalog'
 
@@ -33,12 +33,9 @@ function contains(query: string): Prisma.StringFilter {
 }
 
 function userVisibility(auth: AuthContext): Prisma.UserWhereInput {
-  const scope = auth.dataScopes.lead ?? 'OWN'
+  const scope = userDirectoryScope(auth.role.key)
   if (scope === 'ALL') {
     return {}
-  }
-  if (scope === 'DEPARTMENT' && auth.user.departmentId) {
-    return { departmentId: auth.user.departmentId }
   }
   if (scope === 'TEAM' && auth.user.teamId) {
     return { teamId: auth.user.teamId }
@@ -75,17 +72,14 @@ function activityVisibility(auth: AuthContext): Prisma.ActivityWhereInput {
 }
 
 function auditVisibility(auth: AuthContext): Prisma.AuditLogWhereInput {
-  const scope = auth.dataScopes.lead ?? 'OWN'
-  if (scope === 'OWN') {
-    return { userId: auth.user.id }
+  const scope = auditDirectoryScope(auth.role.key)
+  if (scope === 'ALL') {
+    return {}
   }
   if (scope === 'TEAM' && auth.user.teamId) {
     return { user: { teamId: auth.user.teamId } }
   }
-  if (scope === 'DEPARTMENT' && auth.user.departmentId) {
-    return { user: { departmentId: auth.user.departmentId } }
-  }
-  return {}
+  return { userId: auth.user.id }
 }
 
 function masterDataHref(categoryKey: string, query: string) {
