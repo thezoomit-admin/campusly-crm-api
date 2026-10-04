@@ -1,10 +1,11 @@
-import { Server } from 'http'
+import { createServer, type Server } from 'http'
 import app from './app'
 import { config } from './config'
 import { startFollowUpJobs } from './jobs/follow-up-jobs'
 import { startOfferExpiryJob } from './jobs/offer-expiry'
 import { prisma } from './lib/prisma'
 import { ensureLeadAttribution } from './modules/leads/lead-attribution'
+import { initSocket } from './realtime/socket'
 
 const PORT = config.port
 let server: Server | undefined
@@ -73,11 +74,14 @@ async function bootstrap() {
       console.error('Lead attribution setup skipped:', error)
     })
 
-    server = app.listen(PORT, '0.0.0.0', () => {
+    server = createServer(app)
+    initSocket(server)
+    server.listen(PORT, '0.0.0.0', () => {
       console.log('🚀 Campusly CRM API Started Successfully!')
       console.log(`📍 Server running on: http://localhost:${PORT}`)
       console.log(`🌍 Environment: ${config.env}`)
       console.log(`🔗 Health check: http://localhost:${PORT}/api/health`)
+      console.log(`🔌 Socket.IO ready on: http://localhost:${PORT}/socket.io`)
       console.log('─'.repeat(60))
       followUpJobTimer = startFollowUpJobs()
       console.log('⏱️  Follow-up jobs started (overdue + reminders, every 2 min)')

@@ -156,6 +156,26 @@ export async function login(input: LoginInput) {
     }
   }
 
+  if (user.status === 'INVITED') {
+    queueAuditLog({
+      userId: user.id,
+      action: 'LOGIN_DENIED',
+      entityType: 'user',
+      entityId: user.id,
+      ipAddress,
+      userAgent,
+      metadata: { reason: 'invite_pending' },
+    })
+    return {
+      ok: false as const,
+      status: 403,
+      body: {
+        error: 'Account invite pending. Check your email for the setup link, or use Forgot password to resend it.',
+        code: 'ACCOUNT_INVITED',
+      },
+    }
+  }
+
   if (user.status === 'INACTIVE') {
     queueAuditLog({
       userId: user.id,

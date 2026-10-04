@@ -1,7 +1,57 @@
 import { prisma } from '../../lib/prisma'
 import { httpError } from '../../lib/http-error'
+import { emitNotificationCreated } from '../../realtime/socket'
 import { hasPermission } from '../auth/access'
 import type { AuthContext } from '../auth/session.service'
+
+function serializeNotification(row: {
+  id: string
+  title: string
+  body: string | null
+  link: string | null
+  type: string | null
+  status: string
+  leadId: string | null
+  followUpId: string | null
+  createdAt: Date
+  readAt: Date | null
+}) {
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    link: row.link,
+    type: row.type,
+    status: row.status,
+    leadId: row.leadId,
+    followUpId: row.followUpId,
+    createdAt: row.createdAt.toISOString(),
+    readAt: row.readAt ? row.readAt.toISOString() : null,
+  }
+}
+
+async function countUnreadNotifications(userId: string) {
+  return prisma.notification.count({
+    where: {
+      userId,
+      status: 'Unread',
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+    },
+  })
+}
+
+function pushNotificationCreated(userId: string, row: Parameters<typeof serializeNotification>[0]) {
+  void countUnreadNotifications(userId)
+    .then((unreadCount) => {
+      emitNotificationCreated(userId, {
+        notification: serializeNotification(row),
+        unreadCount,
+      })
+    })
+    .catch((error) => {
+      console.error('[socket] Failed to emit notification:created', error)
+    })
+}
 
 export async function createNotification(input: {
   userId: string
@@ -19,7 +69,7 @@ export async function createNotification(input: {
     if (existing) return existing
   }
 
-  return prisma.notification.create({
+  const created = await prisma.notification.create({
     data: {
       userId: input.userId,
       title: input.title,
@@ -34,6 +84,9 @@ export async function createNotification(input: {
       expiresAt: input.expiresAt || null,
     },
   })
+
+  pushNotificationCreated(input.userId, created)
+  return created
 }
 
 export async function listNotifications(auth: AuthContext, query: { limit?: number; unreadOnly?: boolean }) {
@@ -53,28 +106,11 @@ export async function listNotifications(auth: AuthContext, query: { limit?: numb
       orderBy: { createdAt: 'desc' },
       take: limit,
     }),
-    prisma.notification.count({
-      where: {
-        userId: auth.user.id,
-        status: 'Unread',
-        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-      },
-    }),
+    countUnreadNotifications(auth.user.id),
   ])
 
   return {
-    items: items.map((row) => ({
-      id: row.id,
-      title: row.title,
-      body: row.body,
-      link: row.link,
-      type: row.type,
-      status: row.status,
-      leadId: row.leadId,
-      followUpId: row.followUpId,
-      createdAt: row.createdAt.toISOString(),
-      readAt: row.readAt ? row.readAt.toISOString() : null,
-    })),
+    items: items.map(serializeNotification),
     unreadCount,
   }
 }

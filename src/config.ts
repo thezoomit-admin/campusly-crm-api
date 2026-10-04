@@ -47,6 +47,16 @@ export const config = {
   sessionHours: Number(process.env.SESSION_HOURS) || 12,
   rememberMeDays: Number(process.env.REMEMBER_ME_DAYS) || 30,
   resetTokenHours: Number(process.env.RESET_TOKEN_HOURS) || 2,
+  /** How long account-invite / set-password links remain valid. */
+  inviteTokenHours: Number(process.env.INVITE_TOKEN_HOURS) || 72,
+  /**
+   * Public web app origin used in invite/reset emails.
+   * Falls back to the first CLIENT_ORIGIN when unset.
+   */
+  appPublicUrl: (process.env.APP_PUBLIC_URL || splitOrigins(defaultClientOrigins())[0] || 'http://localhost:5173').replace(
+    /\/$/,
+    '',
+  ),
   minPasswordLength: Number(process.env.MIN_PASSWORD_LENGTH) || 8,
   /**
    * WhatsApp Business (Meta Cloud API). When the access token or phone number id is missing,

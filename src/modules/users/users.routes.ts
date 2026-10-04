@@ -3,7 +3,7 @@ import multer from 'multer'
 import type { UserStatus } from '../../lib/prisma-client'
 import { httpError } from '../../lib/http-error'
 import { requestIp, requestUserAgent, routeParam } from '../../lib/request'
-import { requestPasswordReset } from '../auth/password-reset.service'
+import { requestPasswordReset, sendAccountInvite } from '../auth/password-reset.service'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
   createUser,
@@ -83,7 +83,7 @@ usersRouter.get('/:id', requirePermission('user:view'), async (req, res, next) =
 
 usersRouter.patch('/:id', requirePermission('user:edit'), acceptPhoto, async (req, res, next) => {
   try {
-    const user = await updateUser(
+    const result = await updateUser(
       req.auth!,
       routeParam(req.params.id),
       req.body ?? {},
@@ -93,7 +93,7 @@ usersRouter.patch('/:id', requirePermission('user:edit'), acceptPhoto, async (re
       },
       req.file,
     )
-    res.json({ user })
+    res.json(result)
   } catch (error) {
     next(error)
   }
@@ -164,11 +164,36 @@ usersRouter.post('/:id/force-logout', requirePermission('user:configure'), async
 usersRouter.post('/:id/password-reset', requirePermission('user:configure'), async (req, res, next) => {
   try {
     const user = await getUser(req.auth!, routeParam(req.params.id))
-    const result = await requestPasswordReset({
-      identifier: user.email,
+    const result =
+      user.status === 'INVITED'
+        ? await sendAccountInvite({
+            userId: user.id,
+            actorId: req.auth!.user.id,
+            ipAddress: requestIp(req),
+            userAgent: requestUserAgent(req),
+            resent: true,
+          })
+        : await requestPasswordReset({
+            identifier: user.email,
+            actorId: req.auth!.user.id,
+            ipAddress: requestIp(req),
+            userAgent: requestUserAgent(req),
+          })
+    res.json(result.body)
+  } catch (error) {
+    next(error)
+  }
+})
+
+usersRouter.post('/:id/resend-invite', requirePermission('user:configure'), async (req, res, next) => {
+  try {
+    const user = await getUser(req.auth!, routeParam(req.params.id))
+    const result = await sendAccountInvite({
+      userId: user.id,
       actorId: req.auth!.user.id,
       ipAddress: requestIp(req),
       userAgent: requestUserAgent(req),
+      resent: true,
     })
     res.json(result.body)
   } catch (error) {

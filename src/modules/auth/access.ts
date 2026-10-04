@@ -62,8 +62,34 @@ export function hasPermission(permissions: string[], required: string | string[]
   return needed.some((item) => permissions.includes(item))
 }
 
+/** CRM User account must be ACTIVE to receive leads. */
 export function canReceiveLeadAssignment(status: string) {
   return status === 'ACTIVE'
+}
+
+/** Employment statuses allowed for new lead assignment (CRM-027 Rule-5). */
+export const LEAD_ELIGIBLE_EMPLOYMENT_STATUSES = new Set(['ACTIVE', 'PROBATION'])
+
+export function isEmploymentStatusLeadEligible(code: string | null | undefined) {
+  return Boolean(code && LEAD_ELIGIBLE_EMPLOYMENT_STATUSES.has(code))
+}
+
+/**
+ * Users without an Employee record remain eligible (legacy).
+ * Linked Employees must be Active/Probation — Inactive/Resigned/Terminated/On Leave are excluded.
+ */
+export function canUserReceiveLeadByEmployment(employeeStatusCode: string | null | undefined, hasEmployee: boolean) {
+  if (!hasEmployee) {
+    return true
+  }
+  return isEmploymentStatusLeadEligible(employeeStatusCode)
+}
+
+/** Employment statuses that should disable the linked CRM login. */
+export const CRM_DISABLE_EMPLOYMENT_STATUSES = new Set(['INACTIVE', 'RESIGNED', 'TERMINATED'])
+
+export function shouldDisableCrmForEmploymentStatus(code: string | null | undefined) {
+  return Boolean(code && CRM_DISABLE_EMPLOYMENT_STATUSES.has(code))
 }
 
 export type DirectoryScope = 'OWN' | 'TEAM' | 'ALL'

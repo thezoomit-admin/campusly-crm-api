@@ -6,7 +6,7 @@ import { prisma } from '../../lib/prisma'
 import { defaultScopesForRole, isCriticalPermission, permissionLabel, userDirectoryScope } from '../auth/access'
 import { normalizeEmail, normalizeUsername } from '../auth/identifier'
 import { hashPassword } from '../auth/password'
-import { requestPasswordReset } from '../auth/password-reset.service'
+import { sendAccountInvite } from '../auth/password-reset.service'
 import type { AuthContext } from '../auth/session.service'
 import { revokeSession, revokeUserSessions } from '../auth/session.service'
 import { notifyCriticalPermissionChanges } from '../notifications/notifications.service'
@@ -221,7 +221,7 @@ export async function listUsers(
       query.roleId ? { primaryRoleId: query.roleId } : {},
       query.departmentId ? { departmentId: query.departmentId } : {},
       query.teamId ? { teamId: query.teamId } : {},
-      query.status && ['ACTIVE', 'INACTIVE', 'SUSPENDED'].includes(query.status)
+      query.status && ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED'].includes(query.status)
         ? { status: query.status as UserStatus }
         : {},
     ],
@@ -271,8 +271,12 @@ export async function createUser(
   const username = typeof input.username === 'string' ? normalizeUsername(input.username) : ''
   const mobile = parseMobile(input.mobile)
   const password = typeof input.password === 'string' ? input.password : ''
-  const status =
-    input.status === 'INACTIVE' || input.status === 'SUSPENDED' ? (input.status as UserStatus) : 'ACTIVE'
+  const requestedStatus =
+    input.status === 'INACTIVE' || input.status === 'SUSPENDED' || input.status === 'INVITED'
+      ? (input.status as UserStatus)
+      : 'ACTIVE'
+  // Industrial invite flow: accounts without an admin-set password start as INVITED.
+  const status: UserStatus = password ? requestedStatus : 'INVITED'
 
   if (fullName.length < 2 || fullName.length > 100) {
     throw httpError.badRequest('Full name must be 2–100 characters.')
@@ -344,13 +348,13 @@ export async function createUser(
 
     let reset: Record<string, unknown> | undefined
     if (!password) {
-      const requested = await requestPasswordReset({
-        identifier: email,
+      const invited = await sendAccountInvite({
+        userId: user.id,
         actorId: auth.user.id,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
       })
-      reset = requested.body
+      reset = invited.body
     }
 
     const created = await prisma.user.findUniqueOrThrow({
@@ -385,6 +389,7 @@ export async function updateUser(
 
   const data: Prisma.UserUpdateInput = {}
   const changes: Record<string, unknown> = {}
+  let resentInviteEmail: string | null = null
 
   if (typeof input.fullName === 'string') {
     const fullName = input.fullName.trim()
@@ -400,8 +405,14 @@ export async function updateUser(
     if (!isValidEmail(email)) {
       throw httpError.badRequest('Please enter a valid email.')
     }
-    data.email = email
-    changes.email = email
+    if (email !== normalizeEmail(existing.email)) {
+      if (existing.status !== 'INVITED') {
+        throw httpError.badRequest('Email can only be changed while the account is still invited.')
+      }
+      data.email = email
+      changes.email = email
+      resentInviteEmail = email
+    }
   }
 
   if (typeof input.username === 'string') {
@@ -483,7 +494,25 @@ export async function updateUser(
       where: { id },
       data,
     })
+    if (resentInviteEmail) {
+      await prisma.employee.updateMany({
+        where: { userId: id },
+        data: { officialEmail: resentInviteEmail },
+      })
+    }
     await applyUserPhoto(id, photo)
+
+    let reset: Record<string, unknown> | undefined
+    if (resentInviteEmail) {
+      const invited = await sendAccountInvite({
+        userId: id,
+        actorId: auth.user.id,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+        resent: true,
+      })
+      reset = invited.body
+    }
 
     const user = await prisma.user.findUniqueOrThrow({
       where: { id },
@@ -500,7 +529,7 @@ export async function updateUser(
       metadata: changes as Prisma.InputJsonValue,
     })
 
-    return serializeUser(user)
+    return { user: serializeUser(user), reset }
   } catch (error) {
     rethrowUnique(error)
   }
@@ -546,8 +575,19 @@ export async function updateUserStatus(
   status: UserStatus,
   meta: { ipAddress?: string; userAgent?: string },
 ) {
-  if (!['ACTIVE', 'INACTIVE', 'SUSPENDED'].includes(status)) {
+  if (!['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED'].includes(status)) {
     throw httpError.badRequest('Invalid status.')
+  }
+
+  const existing = await prisma.user.findUnique({ where: { id } })
+  if (!existing) {
+    throw httpError.notFound('User not found.')
+  }
+  if (existing.status === 'INVITED' && status === 'ACTIVE') {
+    throw httpError.badRequest('Invited users must set a password from their email link before becoming Active.')
+  }
+  if (status === 'INVITED' && existing.status !== 'INVITED') {
+    throw httpError.badRequest('Only new accounts can be marked as Invited.')
   }
 
   await assertNotLastAdmin(id, status)

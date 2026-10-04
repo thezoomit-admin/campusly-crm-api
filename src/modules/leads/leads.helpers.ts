@@ -285,6 +285,28 @@ export function assigneeVisibilityWhere(auth: AuthContext): Prisma.UserWhereInpu
   return { id: auth.user.id }
 }
 
+/** ACTIVE user + Active/Probation employment (or no Employee record). CRM-027 Rule-5. */
+export function leadEligibleAssigneeWhere(): Prisma.UserWhereInput {
+  return {
+    status: 'ACTIVE',
+    OR: [
+      { employee: { is: null } },
+      { employee: { employmentStatus: { code: { in: ['ACTIVE', 'PROBATION'] } } } },
+    ],
+  }
+}
+
+export async function assertLeadEligibleAssignee(userId: string) {
+  const user = await prisma.user.findFirst({
+    where: {
+      id: userId,
+      AND: [leadEligibleAssigneeWhere()],
+    },
+    select: { id: true, fullName: true, teamId: true, status: true },
+  })
+  return user
+}
+
 export const WORKSPACE_ACCESS_DENIED = 'You do not have permission to access this lead\'s workspace.'
 
 export async function findReadableLead(auth: AuthContext, leadId: string) {

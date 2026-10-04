@@ -19,7 +19,7 @@ export async function getFollowUpPerformance(
   auth: AuthContext,
   query: { from?: string; to?: string; ownerId?: string },
 ) {
-  if (!hasPermission(auth.permissions, 'follow_up:view')) {
+  if (!hasPermission(auth.permissions, ['follow_up:view', 'employee_performance:view'])) {
     throw httpError.accessDenied()
   }
 

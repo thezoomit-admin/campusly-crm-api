@@ -95,6 +95,7 @@ masterDataRouter.get('/options', async (req, res, next) => {
         id: item.id,
         name: item.name,
         code: item.code,
+        description: item.description,
         parentId: item.parentId,
         status: item.status,
         sortOrder: item.sortOrder,

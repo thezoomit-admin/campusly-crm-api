@@ -18,6 +18,7 @@ import {
   assertCanManageLeadAssignment,
   assertCanViewLead,
   assigneeVisibilityWhere,
+  leadEligibleAssigneeWhere,
   computeLeadScore,
   FOLLOW_UP_CLOSED_STATUSES,
   formatWaitingTime,
@@ -236,7 +237,7 @@ function leadSubtitle(lead: LeadRecord) {
   return parts.join(' | ')
 }
 
-function listItem(lead: LeadRecord) {
+function listItem(lead: LeadRecord, nextFollowUpAt: string | null = null) {
   return {
     id: lead.id,
     code: lead.code,
@@ -250,6 +251,7 @@ function listItem(lead: LeadRecord) {
     status: lead.status,
     priority: lead.priority || '—',
     score: String(lead.leadScore ?? 0),
+    nextFollowUpAt,
     updated: daysAgoLabel(lead.updatedAt),
     createdAt: lead.createdAt.toISOString(),
   }
@@ -611,8 +613,23 @@ export async function listLeads(
   const lastMap = countByStatus(statusLast30)
   const prevMap = countByStatus(statusPrev30)
 
+  const leadIds = rows.map((lead) => lead.id)
+  const nextFollowUps = leadIds.length
+    ? await prisma.followUp.findMany({
+        where: { leadId: { in: leadIds }, AND: [openFollowUpWhere()] },
+        orderBy: [{ dueAt: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }],
+      })
+    : []
+  const nextByLead = new Map<string, (typeof nextFollowUps)[number]>()
+  for (const followUp of nextFollowUps) {
+    if (followUp.leadId && !nextByLead.has(followUp.leadId)) nextByLead.set(followUp.leadId, followUp)
+  }
+
   return {
-    items: rows.map(listItem),
+    items: rows.map((lead) => {
+      const next = nextByLead.get(lead.id)
+      return listItem(lead, next?.dueAt ? next.dueAt.toISOString() : null)
+    }),
     total,
     page,
     limit,
@@ -1363,8 +1380,7 @@ export async function reopenLead(auth: AuthContext, id: string, body: Record<str
   const assignee = await prisma.user.findFirst({
     where: {
       id: ownerId,
-      status: 'ACTIVE',
-      AND: [assigneeVisibilityWhere(auth)],
+      AND: [leadEligibleAssigneeWhere(), assigneeVisibilityWhere(auth)],
     },
     include: { team: { select: { id: true, name: true } } },
   })
@@ -1877,8 +1893,8 @@ export async function listLeadAssignees(auth: AuthContext, query: { teamId?: str
   const role = query.role === 'counsellor' || query.role === 'call_executive' ? query.role : undefined
   const users = await prisma.user.findMany({
     where: {
-      status: 'ACTIVE',
       AND: [
+        leadEligibleAssigneeWhere(),
         role === 'counsellor' ? {} : assigneeVisibilityWhere(auth),
         role ? { primaryRole: { key: role } } : { primaryRole: { key: { in: [...ASSIGNEE_ROLE_KEYS] } } },
         teamId ? { teamId } : {},
@@ -1930,8 +1946,7 @@ export async function assignLead(auth: AuthContext, id: string, body: Record<str
   const assignee = await prisma.user.findFirst({
     where: {
       id: ownerId,
-      status: 'ACTIVE',
-      AND: [assigneeVisibilityWhere(auth)],
+      AND: [leadEligibleAssigneeWhere(), assigneeVisibilityWhere(auth)],
     },
     include: { team: { select: { id: true, name: true } } },
   })

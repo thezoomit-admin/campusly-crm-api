@@ -11,7 +11,7 @@ export type AuthUser = {
   username: string
   mobile: string
   photoUrl?: string | null
-  status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED'
+  status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'INVITED'
   departmentId: string | null
   teamId: string | null
   primaryRoleId: string
@@ -85,7 +85,7 @@ export function buildAuthContext(input: {
     username: string
     mobile: string
     photoUrl?: string | null
-    status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED'
+    status: 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'INVITED'
     departmentId: string | null
     teamId: string | null
     primaryRoleId: string | null
