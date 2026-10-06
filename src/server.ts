@@ -1,6 +1,8 @@
 import { createServer, type Server } from 'http'
 import app from './app'
 import { config } from './config'
+import { startEmailInboundSyncJob } from './jobs/email-inbound-sync'
+import { startEmailWaitingReplyJob } from './jobs/email-waiting-reply'
 import { startFollowUpJobs } from './jobs/follow-up-jobs'
 import { startOfferExpiryJob } from './jobs/offer-expiry'
 import { prisma } from './lib/prisma'
@@ -11,6 +13,8 @@ const PORT = config.port
 let server: Server | undefined
 let followUpJobTimer: ReturnType<typeof setInterval> | undefined
 let offerExpiryTimer: ReturnType<typeof setInterval> | undefined
+let emailInboundTimer: ReturnType<typeof setInterval> | undefined
+let emailWaitingReplyTimer: ReturnType<typeof setInterval> | undefined
 
 const gracefulShutdown = (signal: string) => {
   console.log(`\n🛑 ${signal} received. Starting graceful shutdown...`)
@@ -22,6 +26,14 @@ const gracefulShutdown = (signal: string) => {
   if (offerExpiryTimer) {
     clearInterval(offerExpiryTimer)
     offerExpiryTimer = undefined
+  }
+  if (emailInboundTimer) {
+    clearInterval(emailInboundTimer)
+    emailInboundTimer = undefined
+  }
+  if (emailWaitingReplyTimer) {
+    clearInterval(emailWaitingReplyTimer)
+    emailWaitingReplyTimer = undefined
   }
 
   if (server) {
@@ -86,6 +98,8 @@ async function bootstrap() {
       followUpJobTimer = startFollowUpJobs()
       console.log('⏱️  Follow-up jobs started (overdue + reminders, every 2 min)')
       offerExpiryTimer = startOfferExpiryJob()
+      emailInboundTimer = startEmailInboundSyncJob()
+      emailWaitingReplyTimer = startEmailWaitingReplyJob()
     })
   } catch (error) {
     console.error('❌ Failed to start server:', error)

@@ -1,5 +1,9 @@
 export const PIPELINE_STATUSES = ['New', 'Contacted', 'Qualified', 'Counselling', 'Offered', 'Converted'] as const
 
+/** Terminal close outcomes shown under the Closed leads tab (not Converted). */
+export const CLOSED_PIPELINE_STATUS_CODES = ['LOST', 'CLOSED', 'DUPLICATE', 'INVALID'] as const
+export const CLOSED_PIPELINE_STATUS_NAMES = ['Lost', 'Closed', 'Duplicate', 'Invalid'] as const
+
 export const CLOSED_ASSIGNMENT_STATUSES = [
   'Converted',
   'File Opening Pending',

@@ -202,6 +202,36 @@ export async function findManagers() {
   })
 }
 
+function phoneMatchesLead(
+  phoneNormalized: string | null | undefined,
+  lead: { phoneNormalized?: string | null; phone?: string | null; whatsapp?: string | null },
+) {
+  if (!phoneNormalized || phoneNormalized.length < 8) return false
+  const suffix = phoneNormalized.slice(-10)
+  if (lead.phoneNormalized === phoneNormalized) return true
+  if (lead.phoneNormalized && lead.phoneNormalized.endsWith(suffix)) return true
+  if (phoneNormalized.endsWith((lead.phoneNormalized || '').slice(-10)) && (lead.phoneNormalized || '').length >= 8) {
+    return true
+  }
+  if (lead.phone && lead.phone.includes(suffix)) return true
+  if (lead.whatsapp && lead.whatsapp.includes(suffix)) return true
+  return false
+}
+
+async function resolvePrimaryLead(lead: { id: string; duplicateOfLeadId: string | null }) {
+  let current = lead
+  for (let i = 0; i < 5; i += 1) {
+    if (!current.duplicateOfLeadId) return current
+    const parent = await prisma.lead.findUnique({
+      where: { id: current.duplicateOfLeadId },
+      select: { id: true, duplicateOfLeadId: true },
+    })
+    if (!parent) return current
+    current = parent
+  }
+  return current
+}
+
 async function matchExistingLead(input: {
   leadId?: string | null
   phoneNormalized?: string | null
@@ -210,17 +240,18 @@ async function matchExistingLead(input: {
 }) {
   if (input.externalLeadId) {
     const byExternal = await prisma.lead.findUnique({ where: { externalLeadId: input.externalLeadId } })
-    if (byExternal) return byExternal
+    if (byExternal && !byExternal.archivedAt) return byExternal
   }
   if (input.leadId) {
     const byId = await prisma.lead.findUnique({ where: { id: input.leadId } })
-    if (byId) return byId
+    if (byId && !byId.archivedAt) return byId
   }
 
   if (input.phoneNormalized && input.phoneNormalized.length >= 8) {
     const suffix = input.phoneNormalized.slice(-10)
     const byPhone = await prisma.lead.findFirst({
       where: {
+        archivedAt: null,
         OR: [
           { phoneNormalized: input.phoneNormalized },
           { phoneNormalized: { endsWith: suffix } },
@@ -228,15 +259,15 @@ async function matchExistingLead(input: {
           { whatsapp: { contains: suffix } },
         ],
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'asc' },
     })
     if (byPhone) return byPhone
   }
 
   if (input.email) {
     const byEmail = await prisma.lead.findFirst({
-      where: { email: { equals: input.email, mode: 'insensitive' } },
-      orderBy: { createdAt: 'desc' },
+      where: { archivedAt: null, email: { equals: input.email, mode: 'insensitive' } },
+      orderBy: { createdAt: 'asc' },
     })
     if (byEmail) return byEmail
   }
@@ -410,6 +441,15 @@ async function processEvent(eventId: string) {
       externalLeadId: attribution.externalLeadId,
     })
 
+    const matchedByExplicitId = Boolean(event.leadId && matched && matched.id === event.leadId)
+    const matchedByExternal = Boolean(
+      attribution.externalLeadId && matched?.externalLeadId && matched.externalLeadId === attribution.externalLeadId,
+    )
+    const phoneMatched = Boolean(matched && phoneMatchesLead(event.senderPhoneNormalized, matched))
+    // Inbound phone matches create a new lead (flagged duplicate). Explicit link / same external id still update.
+    const createAsPhoneDuplicate = Boolean(matched && phoneMatched && !matchedByExplicitId && !matchedByExternal)
+    const shouldUpdateExisting = Boolean(matched && !createAsPhoneDuplicate)
+
     const country = await resolveCountry(event.preferredCountryCode)
     const actorId = await resolveSystemActorId(matched?.ownerId || matched?.createdById)
     const enquiryAt = event.eventAt || new Date()
@@ -427,15 +467,16 @@ async function processEvent(eventId: string) {
       (event.channel === 'WHATSAPP' ? event.senderPhoneNormalized : null) ||
       (whatsappSameAsPhone ? event.senderPhoneNormalized : null)
 
-    let leadId = matched?.id || null
+    let leadId = shouldUpdateExisting ? matched?.id || null : null
     let leadCreated = false
+    let createdAsDuplicate = false
     let assignedNow = false
     let enteredPool = false
-    let leadCode = matched?.code || ''
-    let leadName = matched?.name || ''
-    let ownerId = matched?.ownerId || null
+    let leadCode = shouldUpdateExisting ? matched?.code || '' : ''
+    let leadName = shouldUpdateExisting ? matched?.name || '' : ''
+    let ownerId = shouldUpdateExisting ? matched?.ownerId || null : null
 
-    if (matched) {
+    if (shouldUpdateExisting && matched) {
       await prisma.lead.update({
         where: { id: matched.id },
         data: {
@@ -503,6 +544,8 @@ async function processEvent(eventId: string) {
         utmTerm: attribution.utmTerm,
       })
     } else {
+      const duplicateOf =
+        createAsPhoneDuplicate && matched ? await resolvePrimaryLead(matched) : null
       const assignment = await resolveCountryAssignment(country.code)
       const newStatus = await prisma.masterDataItem.findUnique({
         where: { categoryKey_code: { categoryKey: 'LEAD_STATUS', code: 'NEW' } },
@@ -543,6 +586,8 @@ async function processEvent(eventId: string) {
             whatsappSameAsPhone: Boolean(whatsappSameAsPhone),
             whatsapp: whatsappValue,
             lastEnquiryAt: enquiryAt,
+            isDuplicate: Boolean(duplicateOf),
+            duplicateOfLeadId: duplicateOf?.id || null,
           },
         })
 
@@ -590,6 +635,7 @@ async function processEvent(eventId: string) {
 
       leadId = created.id
       leadCreated = true
+      createdAsDuplicate = Boolean(duplicateOf)
       assignedNow = Boolean(assignment.ownerId)
       enteredPool = !assignment.ownerId
       leadCode = created.code
@@ -651,7 +697,11 @@ async function processEvent(eventId: string) {
         relatedName: leadName,
         relatedType: 'lead',
         relatedId: leadId,
-        outcome: leadCreated ? 'Lead Created' : 'Lead Updated',
+        outcome: leadCreated
+          ? createdAsDuplicate
+            ? 'Duplicate Lead Created'
+            : 'Lead Created'
+          : 'Lead Updated',
         notes,
         occurredAt: enquiryAt,
         metadata: {
@@ -662,7 +712,8 @@ async function processEvent(eventId: string) {
           formName: event.formName,
           subject: event.subject,
           landingPageUrl: event.landingPageUrl,
-          duplicate: !leadCreated,
+          duplicate: createdAsDuplicate || !leadCreated,
+          createdAsDuplicate,
         },
       },
     })
@@ -1048,7 +1099,139 @@ export async function listLeadCommunications(auth: AuthContext, leadId: string) 
     include: eventInclude,
     orderBy: { eventAt: 'desc' },
   })
-  return { items: rows.map(serializeEvent), total: rows.length }
+
+  const emailEventIds = rows.filter((row) => row.channel === 'EMAIL').map((row) => row.id)
+  const crmMessageIds = rows
+    .map((row) => (row.externalId?.startsWith('crm-email:') ? row.externalId.slice('crm-email:'.length) : null))
+    .filter((id): id is string => Boolean(id))
+
+  const linkedMessages =
+    emailEventIds.length || crmMessageIds.length
+      ? await prisma.emailMessage.findMany({
+          where: {
+            OR: [
+              ...(emailEventIds.length ? [{ communicationEventId: { in: emailEventIds } }] : []),
+              ...(crmMessageIds.length ? [{ id: { in: crmMessageIds } }] : []),
+            ],
+          },
+          select: { id: true, threadId: true, communicationEventId: true },
+        })
+      : []
+
+  const threadByEventId = new Map<string, string>()
+  const threadByMessageId = new Map<string, string>()
+  for (const message of linkedMessages) {
+    threadByMessageId.set(message.id, message.threadId)
+    if (message.communicationEventId) threadByEventId.set(message.communicationEventId, message.threadId)
+  }
+
+  const hubItems = rows.map((row) => {
+    const serialized = serializeEvent(row)
+    const threadId =
+      threadByEventId.get(row.id) ||
+      (row.externalId?.startsWith('crm-email:')
+        ? threadByMessageId.get(row.externalId.slice('crm-email:'.length))
+        : undefined) ||
+      null
+    return { ...serialized, threadId }
+  })
+  const linkedEventIds = new Set(rows.map((row) => row.id))
+  const hubExternalIds = new Set(rows.map((row) => row.externalId).filter(Boolean) as string[])
+
+  const emailMessages = await prisma.emailMessage.findMany({
+    where: { thread: { leadId } },
+    orderBy: { sentAt: 'desc' },
+    take: 200,
+    select: {
+      id: true,
+      direction: true,
+      subject: true,
+      bodyText: true,
+      fromEmail: true,
+      fromName: true,
+      toEmail: true,
+      sentAt: true,
+      communicationEventId: true,
+      deliveryStatus: true,
+      threadId: true,
+    },
+  })
+
+  const lead = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: { id: true, code: true, name: true, ownerId: true, ownerName: true, status: true },
+  })
+
+  const synthetic = emailMessages
+    .filter((message) => {
+      if (message.communicationEventId && linkedEventIds.has(message.communicationEventId)) return false
+      if (hubExternalIds.has(`crm-email:${message.id}`)) return false
+      if (hubExternalIds.has(message.id)) return false
+      return true
+    })
+    .map((message) => {
+      const outgoing = message.direction === 'outgoing'
+      const bounced = message.deliveryStatus === 'bounced' || message.deliveryStatus === 'failed'
+      return {
+        id: `email:${message.id}`,
+        channel: 'EMAIL' as const,
+        eventAt: message.sentAt.toISOString(),
+        senderName: message.fromName,
+        senderPhone: null,
+        senderEmail: message.fromEmail,
+        preferredCountryCode: null,
+        subject: message.subject,
+        message: message.bodyText,
+        sourceCode: 'EMAIL_CRM',
+        campaignName: null,
+        campaign: null,
+        utmSource: null,
+        utmMedium: null,
+        utmCampaign: null,
+        landingPageUrl: null,
+        phoneCountryCode: null,
+        whatsapp: null,
+        whatsappSameAsPhone: null,
+        currentLocation: null,
+        highestQualificationCode: null,
+        preferredIntakeCode: null,
+        preferredDegreeCode: null,
+        direction: outgoing ? 'outgoing' : 'incoming',
+        externalId: `crm-email:${message.id}`,
+        formName: bounced
+          ? outgoing
+            ? 'CRM outbound (failed)'
+            : 'Email'
+          : outgoing
+            ? 'CRM outbound'
+            : 'Student reply',
+        processingStatus: 'PROCESSED' as const,
+        processingError: null,
+        leadId,
+        leadCreated: false,
+        activityId: null,
+        processedAt: message.sentAt.toISOString(),
+        createdAt: message.sentAt.toISOString(),
+        updatedAt: message.sentAt.toISOString(),
+        lead: lead
+          ? {
+              id: lead.id,
+              code: lead.code,
+              name: lead.name,
+              ownerId: lead.ownerId,
+              ownerName: lead.ownerName,
+              status: lead.status,
+            }
+          : null,
+        threadId: message.threadId,
+      }
+    })
+
+  const items = [...hubItems, ...synthetic].sort(
+    (a, b) => new Date(b.eventAt).getTime() - new Date(a.eventAt).getTime(),
+  )
+
+  return { items, total: items.length }
 }
 
 export async function reprocessCommunication(auth: AuthContext, id: string) {

@@ -166,6 +166,7 @@ model User {
   counselledStudents  Student[]              @relation("StudentCounsellor")
   uploadedDocuments   CrmDocument[]          @relation("DocumentUploader")
   uploadedLeadDocuments LeadDocument[]       @relation("LeadDocumentUploader")
+  authoredLeadNotes   LeadNote[]             @relation("LeadNoteAuthor")
   ownedFollowUps      FollowUp[]             @relation("FollowUpOwner")
   notifications       Notification[]         @relation("NotificationRecipient")
   campaignsCreated    Campaign[]             @relation("CampaignCreatedBy")
@@ -740,9 +741,10 @@ model Lead {
   name      String
   phone     String?
   phoneNormalized     String?  @map("phone_normalized")
-  phoneCountryCode    String?  @map("phone_country_code")
-  whatsapp            String?
-  whatsappSameAsPhone Boolean  @default(false) @map("whatsapp_same_as_phone")
+  phoneCountryCode       String?  @map("phone_country_code")
+  whatsapp               String?
+  whatsappCountryCode    String?  @map("whatsapp_country_code")
+  whatsappSameAsPhone    Boolean  @default(false) @map("whatsapp_same_as_phone")
   email               String?
   dateOfBirth         DateTime? @map("date_of_birth") @db.Date
   currentLocation     String?  @map("current_location")
@@ -843,6 +845,10 @@ model Lead {
   priorityManual         Boolean @default(false) @map("priority_manual")
   priorityOverrideReason String? @map("priority_override_reason")
 
+  isDuplicate       Boolean   @default(false) @map("is_duplicate")
+  duplicateOfLeadId String?   @map("duplicate_of_lead_id") @db.Uuid
+  archivedAt        DateTime? @map("archived_at")
+
   createdById String?  @map("created_by_id") @db.Uuid
   updatedById String?  @map("updated_by_id") @db.Uuid
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
@@ -854,9 +860,12 @@ model Lead {
   updatedBy           User?  @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   marketingCampaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   latestMarketingCampaign Campaign? @relation("LeadLatestCampaign", fields: [latestCampaignId], references: [id], onDelete: SetNull)
+  duplicateOf         Lead?  @relation("LeadDuplicates", fields: [duplicateOfLeadId], references: [id], onDelete: SetNull)
+  duplicates          Lead[] @relation("LeadDuplicates")
   assignments         LeadAssignment[]
   qualificationHistory LeadQualificationHistory[]
   statusHistory       LeadStatusHistory[]
+  notesHistory        LeadNote[]
   followUps           FollowUp[]
   notifications       Notification[]
   communicationEvents CommunicationEvent[]
@@ -877,7 +886,24 @@ model Lead {
   @@index([channelCode])
   @@index([campaignId])
   @@index([latestCampaignId])
+  @@index([isDuplicate])
+  @@index([archivedAt])
+  @@index([duplicateOfLeadId])
   @@map("leads")
+}
+
+model LeadNote {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId      String   @map("lead_id") @db.Uuid
+  body        String   @db.Text
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdBy   User?    @relation("LeadNoteAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([leadId, createdAt])
+  @@index([createdById])
+  @@map("lead_notes")
 }
 
 model LeadDocument {

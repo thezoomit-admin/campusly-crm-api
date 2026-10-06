@@ -1,7 +1,9 @@
 import { Router } from 'express'
 import multer from 'multer'
+import { writeAuditLog } from '../../lib/audit'
 import { httpError } from '../../lib/http-error'
 import { requestIp, requestUserAgent, routeParam } from '../../lib/request'
+import { respondWithExport } from '../../lib/xlsx-export'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
   createEmployee,
@@ -13,6 +15,7 @@ import {
   listEmployeeAuditLogs,
   listEmployeeOptions,
   listEmployees,
+  exportEmployeesTable,
   updateEmployee,
   updateEmployeePhoto,
   updateEmployeeStatus,
@@ -69,6 +72,37 @@ employeesRouter.get('/', requirePermission('employee:view'), async (req, res, ne
 employeesRouter.get('/options', requirePermission(['employee:view', 'employee:create', 'employee:edit']), async (req, res, next) => {
   try {
     res.json(await listEmployeeOptions(req.auth!))
+  } catch (error) {
+    next(error)
+  }
+})
+
+employeesRouter.get('/export', requirePermission('employee:view'), async (req, res, next) => {
+  try {
+    const table = await exportEmployeesTable(req.auth!, {
+      search: queryString(req.query.search),
+      departmentId: queryString(req.query.departmentId),
+      teamId: queryString(req.query.teamId),
+      designationId: queryString(req.query.designationId),
+      roleId: queryString(req.query.roleId),
+      employmentTypeId: queryString(req.query.employmentTypeId),
+      employmentStatusId: queryString(req.query.employmentStatusId),
+      reportingManagerId: queryString(req.query.reportingManagerId),
+      joiningFrom: queryString(req.query.joiningFrom),
+      joiningTo: queryString(req.query.joiningTo),
+    })
+    await writeAuditLog({
+      userId: req.auth!.user.id,
+      action: 'EMPLOYEES_EXPORTED',
+      entityType: 'employee',
+      ipAddress: requestIp(req),
+      userAgent: requestUserAgent(req),
+      metadata: {
+        format: req.query.format === 'json' ? 'json' : 'xlsx',
+        count: table.rows.length,
+      },
+    })
+    await respondWithExport(res, req.query.format, table)
   } catch (error) {
     next(error)
   }

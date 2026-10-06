@@ -4,7 +4,22 @@ import { prisma } from '../../lib/prisma'
 import { hasPermission } from '../auth/access'
 import type { AuthContext } from '../auth/session.service'
 import { assertCanViewLead, asString } from './leads.helpers'
-import { destroyLeadStoredUpload, readLeadStoredFile, saveLeadDocument } from './leads.storage'
+import {
+  destroyLeadStoredUpload,
+  MAX_LEAD_UPLOAD_BYTES,
+  readLeadStoredFile,
+  saveLeadDocument,
+} from './leads.storage'
+
+const LEAD_DOC_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+])
 
 type AuditMeta = { ipAddress?: string; userAgent?: string }
 
@@ -165,4 +180,84 @@ export async function getLeadDocumentFile(auth: AuthContext, leadId: string, doc
 
   const buffer = await readLeadStoredFile(document.storageKey)
   return { buffer, fileName: document.fileName, mimeType: document.mimeType }
+}
+
+/**
+ * Copies an email attachment into Lead Documents (system/inbound path — no auth upload permission).
+ * Skips unsupported types/sizes and dedupes by display file name.
+ */
+export async function createLeadDocumentFromEmailAttachment(input: {
+  leadId: string
+  leadName: string
+  buffer: Buffer
+  mimeType: string
+  fileName: string
+  messageId: string
+  category?: string | null
+  uploadedById: string
+}) {
+  const mime = (input.mimeType || '').toLowerCase().split(';')[0].trim()
+  if (!LEAD_DOC_MIME_TYPES.has(mime) || input.buffer.length > MAX_LEAD_UPLOAD_BYTES || input.buffer.length <= 0) {
+    return { created: false as const, skipped: true as const, reason: 'unsupported' as const }
+  }
+
+  const baseName = (input.fileName || 'attachment').replace(/[^\w.\- ()[\]]+/g, '_').slice(0, 120)
+  const categoryPart = input.category?.trim() ? ` · ${input.category.trim()}` : ''
+  const displayName = `[Email${categoryPart} · ${input.messageId.slice(0, 8)}] ${baseName}`.slice(0, 200)
+
+  const existing = await prisma.leadDocument.findFirst({
+    where: { leadId: input.leadId, fileName: displayName },
+    select: { id: true },
+  })
+  if (existing) {
+    return { created: false as const, skipped: false as const, documentId: existing.id }
+  }
+
+  const fakeFile = {
+    buffer: input.buffer,
+    mimetype: mime,
+    size: input.buffer.length,
+    originalname: baseName,
+  } as Express.Multer.File
+
+  let saved
+  try {
+    saved = await saveLeadDocument(input.leadId, fakeFile, displayName)
+  } catch (error) {
+    console.error('[email→docs] lead document save failed:', error)
+    return { created: false as const, skipped: true as const, reason: 'upload_failed' as const }
+  }
+
+  const created = await prisma.leadDocument.create({
+    data: {
+      leadId: input.leadId,
+      fileName: saved.fileName,
+      mimeType: saved.mimeType,
+      storageKey: saved.storageKey,
+      fileSize: saved.fileSize,
+      uploadedById: input.uploadedById,
+    },
+  })
+
+  await prisma.activity
+    .create({
+      data: {
+        type: 'NOTE',
+        userId: input.uploadedById,
+        notes: `Document from email${input.category ? ` (${input.category})` : ''}: ${created.fileName}`,
+        relatedName: input.leadName,
+        relatedType: 'lead',
+        relatedId: input.leadId,
+        outcome: 'Document from email',
+        metadata: {
+          source: 'email',
+          messageId: input.messageId,
+          category: input.category || null,
+          documentId: created.id,
+        },
+      },
+    })
+    .catch(() => undefined)
+
+  return { created: true as const, skipped: false as const, documentId: created.id }
 }

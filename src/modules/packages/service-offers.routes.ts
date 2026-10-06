@@ -7,6 +7,7 @@ import {
   cancelLeadServiceOffer,
   deleteLeadServiceOffer,
   generateLeadServiceOffer,
+  listLeadPayments,
   listLeadServiceOffers,
   recordOfferInstallmentPayment,
   rejectLeadServiceOffer,
@@ -52,6 +53,14 @@ serviceOffersRouter.get('/', requirePermission('service:view'), async (req, res,
 serviceOffersRouter.get('/context', requirePermission('service:view'), async (req, res, next) => {
   try {
     res.json(await serviceOfferContext(req.auth!, leadId(req)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+serviceOffersRouter.get('/payments', requirePermission(['payment:view', 'service:view']), async (req, res, next) => {
+  try {
+    res.json(await listLeadPayments(req.auth!, leadId(req)))
   } catch (error) {
     next(error)
   }
