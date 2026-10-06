@@ -1,7 +1,9 @@
 import { Router } from 'express'
 import multer from 'multer'
 import { httpError } from '../../lib/http-error'
+import { writeAuditLog } from '../../lib/audit'
 import { requestIp, requestUserAgent, routeParam } from '../../lib/request'
+import { respondWithExport } from '../../lib/xlsx-export'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
   assignLead,
@@ -13,10 +15,12 @@ import {
   listLeadAssignees,
   listLeadAssignments,
   listLeadPool,
+  exportLeadRows,
   listLeads,
   listLeadStatusHistory,
   listMyLeads,
   reopenLead,
+  reviewDuplicateLead,
   updateLead,
   updateLeadStatus,
   updatePriority,
@@ -24,7 +28,9 @@ import {
 } from './leads.service'
 import { correctLeadCampaign, correctLeadSource, listAttributionChanges } from './lead-attribution'
 import { deleteLeadDocument, getLeadDocumentFile, listLeadDocuments, uploadLeadDocument } from './leads.documents'
+import { createLeadNote, listLeadNotes } from './leads.notes'
 import { handoverLead } from './leads.handover'
+import { previewCountryAssignment } from './leads.assignment'
 import { MAX_LEAD_UPLOAD_BYTES } from './leads.storage'
 
 export const leadsRouter = Router()
@@ -68,6 +74,10 @@ leadsRouter.get('/', requirePermission('lead:view'), async (req, res, next) => {
         source: queryString(req.query.source),
         priority: queryString(req.query.priority),
         country: queryString(req.query.country),
+        duplicatesOnly:
+          req.query.duplicatesOnly === '1' ||
+          req.query.duplicatesOnly === 'true' ||
+          req.query.duplicatesOnly === 'on',
       }),
     )
   } catch (error) {
@@ -148,6 +158,45 @@ leadsRouter.get('/assignees', requirePermission(['lead:assign', 'lead:reassign',
   }
 })
 
+leadsRouter.get('/assignment-preview', requirePermission(['lead:create', 'lead:edit']), async (req, res, next) => {
+  try {
+    const countryCode = queryString(req.query.countryCode) || null
+    res.json({ assignment: await previewCountryAssignment(countryCode) })
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.get('/export', requirePermission('lead:export'), async (req, res, next) => {
+  try {
+    const table = await exportLeadRows(req.auth!, {
+      search: queryString(req.query.search),
+      status: queryString(req.query.status),
+      source: queryString(req.query.source),
+      priority: queryString(req.query.priority),
+      country: queryString(req.query.country),
+      duplicatesOnly:
+        req.query.duplicatesOnly === '1' ||
+        req.query.duplicatesOnly === 'true' ||
+        req.query.duplicatesOnly === 'on',
+    })
+    await writeAuditLog({
+      userId: req.auth!.user.id,
+      action: 'LEADS_EXPORTED',
+      entityType: 'lead',
+      ipAddress: requestIp(req),
+      userAgent: requestUserAgent(req),
+      metadata: {
+        format: req.query.format === 'json' ? 'json' : 'xlsx',
+        count: table.rows.length,
+      },
+    })
+    await respondWithExport(res, req.query.format, table)
+  } catch (error) {
+    next(error)
+  }
+})
+
 leadsRouter.get('/:id', requirePermission('lead:view'), async (req, res, next) => {
   try {
     res.json(await getLead(req.auth!, routeParam(req.params.id)))
@@ -167,6 +216,26 @@ leadsRouter.get('/:id/status-history', requirePermission('lead:view'), async (re
 leadsRouter.get('/:id/assignments', requirePermission('lead:view'), async (req, res, next) => {
   try {
     res.json(await listLeadAssignments(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.get('/:id/notes', requirePermission('lead:view'), async (req, res, next) => {
+  try {
+    res.json(await listLeadNotes(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.post('/:id/notes', requirePermission('lead:edit'), async (req, res, next) => {
+  try {
+    const result = await createLeadNote(req.auth!, routeParam(req.params.id), body(req), {
+      ipAddress: requestIp(req),
+      userAgent: requestUserAgent(req),
+    })
+    res.status(201).json(result)
   } catch (error) {
     next(error)
   }
@@ -316,6 +385,22 @@ leadsRouter.patch(
           userAgent: requestUserAgent(req),
         }),
       )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.post(
+  '/:id/duplicate-review',
+  requirePermission('lead:manage_duplicate', 'You do not have permission to review duplicate leads.'),
+  async (req, res, next) => {
+    try {
+      const result = await reviewDuplicateLead(req.auth!, routeParam(req.params.id), body(req), {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      })
+      res.json(result)
     } catch (error) {
       next(error)
     }

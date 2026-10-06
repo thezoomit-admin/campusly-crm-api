@@ -28,6 +28,11 @@ export function isEmailMockMode() {
   return !isEmailConfigured() && !config.isProduction
 }
 
+/** True when IMAP credentials are present and inbound sync is enabled. */
+export function isImapInboundConfigured() {
+  return Boolean(config.email.imap.enabled && config.email.imap.host && config.email.imap.user && config.email.imap.pass)
+}
+
 export function mailboxAddress() {
   return (config.email.fromAddress || config.email.smtpUser || 'enquiry@campusly.local').toLowerCase()
 }
@@ -60,7 +65,7 @@ export async function sendMailboxEmail(input: OutboundEmail): Promise<string> {
   })
 
   try {
-    await transport.sendMail({
+    const info = await transport.sendMail({
       from: config.email.fromName ? `"${config.email.fromName}" <${fromAddress}>` : fromAddress,
       to: input.to,
       subject: input.subject,
@@ -75,7 +80,9 @@ export async function sendMailboxEmail(input: OutboundEmail): Promise<string> {
         contentType: file.contentType,
       })),
     })
-    return id
+    // Prefer provider-assigned id (Gmail may rewrite Message-ID) so replies can thread.
+    const accepted = typeof info.messageId === 'string' && info.messageId.trim() ? info.messageId.trim() : id
+    return accepted.startsWith('<') ? accepted : `<${accepted}>`
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'SMTP request failed'
     throw new EmailProviderError(detail)

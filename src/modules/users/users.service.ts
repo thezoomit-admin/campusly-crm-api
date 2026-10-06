@@ -1,174 +1,210 @@
-import type { DataScope, Prisma, UserStatus } from '../../lib/prisma-client'
-import { config } from '../../config'
-import { writeAuditLog } from '../../lib/audit'
-import { httpError } from '../../lib/http-error'
-import { prisma } from '../../lib/prisma'
-import { defaultScopesForRole, isCriticalPermission, permissionLabel, userDirectoryScope } from '../auth/access'
-import { normalizeEmail, normalizeUsername } from '../auth/identifier'
-import { hashPassword } from '../auth/password'
-import { sendAccountInvite } from '../auth/password-reset.service'
-import type { AuthContext } from '../auth/session.service'
-import { revokeSession, revokeUserSessions } from '../auth/session.service'
-import { notifyCriticalPermissionChanges } from '../notifications/notifications.service'
-import { saveUserProfilePhoto } from './users.storage'
+import type { DataScope, Prisma, UserStatus } from "../../lib/prisma-client";
+import { config } from "../../config";
+import { writeAuditLog } from "../../lib/audit";
+import { httpError } from "../../lib/http-error";
+import { prisma } from "../../lib/prisma";
+import {
+  exportCell,
+  exportFileStamp,
+  formatExportDateTime,
+  type TabularExport,
+} from "../../lib/xlsx-export";
+import {
+  defaultScopesForRole,
+  isCriticalPermission,
+  permissionLabel,
+  userDirectoryScope,
+} from "../auth/access";
+import { normalizeEmail, normalizeUsername } from "../auth/identifier";
+import { hashPassword } from "../auth/password";
+import { sendAccountInvite } from "../auth/password-reset.service";
+import type { AuthContext } from "../auth/session.service";
+import { revokeSession, revokeUserSessions } from "../auth/session.service";
+import { notifyCriticalPermissionChanges } from "../notifications/notifications.service";
+import { readUserProfilePhoto, saveUserProfilePhoto } from "./users.storage";
 
 const userListInclude = {
   primaryRole: true,
   department: true,
   team: true,
-} as const
+} as const;
 
 const userDetailInclude = {
   primaryRole: true,
   department: true,
   team: true,
   dataScopes: true,
-} as const
+} as const;
 
 function parseMobile(value: unknown) {
-  if (typeof value !== 'string') {
-    return ''
+  if (typeof value !== "string") {
+    return "";
   }
-  return value.replace(/[\s()-]/g, '')
+  return value.replace(/[\s()-]/g, "");
 }
 
 function isValidMobile(value: string) {
-  return /^\+?[0-9]{10,15}$/.test(value)
+  return /^\+?[0-9]{10,15}$/.test(value);
 }
 
 function isValidEmail(value: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 function rethrowUnique(error: unknown): never {
-  if (typeof error === 'object' && error && 'code' in error && error.code === 'P2002') {
-    const target = 'meta' in error ? JSON.stringify((error as { meta?: { target?: unknown } }).meta?.target) : ''
-    if (target.includes('username')) {
-      throw httpError.duplicateUsername()
+  if (
+    typeof error === "object" &&
+    error &&
+    "code" in error &&
+    error.code === "P2002"
+  ) {
+    const target =
+      "meta" in error
+        ? JSON.stringify(
+            (error as { meta?: { target?: unknown } }).meta?.target,
+          )
+        : "";
+    if (target.includes("username")) {
+      throw httpError.duplicateUsername();
     }
-    if (target.includes('email')) {
-      throw httpError.duplicateEmail()
+    if (target.includes("email")) {
+      throw httpError.duplicateEmail();
     }
   }
-  throw error
+  throw error;
 }
 
 async function countActiveAdmins(excludeUserId?: string) {
   return prisma.user.count({
     where: {
-      status: 'ACTIVE',
+      status: "ACTIVE",
       ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
-      primaryRole: { key: 'admin' },
+      primaryRole: { key: "admin" },
     },
-  })
+  });
 }
 
-async function assertNotLastAdmin(userId: string, nextStatus?: UserStatus, nextRoleId?: string) {
+async function assertNotLastAdmin(
+  userId: string,
+  nextStatus?: UserStatus,
+  nextRoleId?: string,
+) {
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
     include: { primaryRole: true },
-  })
+  });
 
-  if (user.primaryRole?.key !== 'admin' || user.status !== 'ACTIVE') {
-    return
+  if (user.primaryRole?.key !== "admin" || user.status !== "ACTIVE") {
+    return;
   }
 
-  const remaining = await countActiveAdmins(userId)
+  const remaining = await countActiveAdmins(userId);
   const leavingAdmin =
-    (nextStatus && nextStatus !== 'ACTIVE') ||
-    (nextRoleId && nextRoleId !== user.primaryRoleId)
+    (nextStatus && nextStatus !== "ACTIVE") ||
+    (nextRoleId && nextRoleId !== user.primaryRoleId);
 
   if (leavingAdmin && remaining < 1) {
-    throw httpError.cannotRemoveAccess()
+    throw httpError.cannotRemoveAccess();
   }
 }
 
 function visibilityWhere(auth: AuthContext): Prisma.UserWhereInput {
-  const scope = userDirectoryScope(auth.role.key)
+  const scope = userDirectoryScope(auth.role.key);
 
-  if (scope === 'ALL') {
-    return {}
+  if (scope === "ALL") {
+    return {};
   }
 
-  if (scope === 'TEAM' && auth.user.teamId) {
-    return { teamId: auth.user.teamId }
+  if (scope === "TEAM" && auth.user.teamId) {
+    return { teamId: auth.user.teamId };
   }
 
-  return { id: auth.user.id }
+  return { id: auth.user.id };
 }
 
 function effectLabel(effect: string) {
-  if (effect === 'ALLOW' || effect === 'ALLOWED') return 'Allowed'
-  if (effect === 'DENY' || effect === 'DENIED') return 'Denied'
-  if (effect === 'ROLE_DEFAULT') return 'Role default'
-  return effect
+  if (effect === "ALLOW" || effect === "ALLOWED") return "Allowed";
+  if (effect === "DENY" || effect === "DENIED") return "Denied";
+  if (effect === "ROLE_DEFAULT") return "Role default";
+  return effect;
 }
 
 async function assertCanViewUser(auth: AuthContext, userId: string) {
   if (userId === auth.user.id) {
-    return
+    return;
   }
 
   const visible = await prisma.user.findFirst({
     where: { id: userId, AND: [visibilityWhere(auth)] },
-  })
+  });
 
   if (!visible) {
-    throw httpError.accessDenied()
+    throw httpError.accessDenied();
   }
 }
 
-async function resolveRole(roleId: unknown, { requireActive } = { requireActive: true }) {
-  if (typeof roleId !== 'string' || !roleId) {
-    throw httpError.roleMissing()
+async function resolveRole(
+  roleId: unknown,
+  { requireActive } = { requireActive: true },
+) {
+  if (typeof roleId !== "string" || !roleId) {
+    throw httpError.roleMissing();
   }
 
-  const role = await prisma.role.findUnique({ where: { id: roleId } })
+  const role = await prisma.role.findUnique({ where: { id: roleId } });
   if (!role) {
-    throw httpError.roleMissing()
+    throw httpError.roleMissing();
   }
-  if (requireActive && role.status !== 'ACTIVE') {
-    throw httpError.badRequest('Please assign a role to the user.', 'ROLE_MISSING')
+  if (requireActive && role.status !== "ACTIVE") {
+    throw httpError.badRequest(
+      "Please assign a role to the user.",
+      "ROLE_MISSING",
+    );
   }
-  return role
+  return role;
 }
 
 async function resolveDepartment(departmentId: unknown) {
-  if (departmentId == null || departmentId === '') {
-    return null
+  if (departmentId == null || departmentId === "") {
+    return null;
   }
-  if (typeof departmentId !== 'string') {
-    throw httpError.badRequest('Invalid department.')
+  if (typeof departmentId !== "string") {
+    throw httpError.badRequest("Invalid department.");
   }
-  const department = await prisma.department.findUnique({ where: { id: departmentId } })
-  if (!department || department.status !== 'ACTIVE') {
-    throw httpError.badRequest('Department is not available.')
+  const department = await prisma.department.findUnique({
+    where: { id: departmentId },
+  });
+  if (!department || department.status !== "ACTIVE") {
+    throw httpError.badRequest("Department is not available.");
   }
-  return department
+  return department;
 }
 
 async function resolveTeam(teamId: unknown, departmentId: string | null) {
-  if (teamId == null || teamId === '') {
-    return null
+  if (teamId == null || teamId === "") {
+    return null;
   }
-  if (typeof teamId !== 'string') {
-    throw httpError.badRequest('Invalid team.')
+  if (typeof teamId !== "string") {
+    throw httpError.badRequest("Invalid team.");
   }
-  const team = await prisma.team.findUnique({ where: { id: teamId } })
-  if (!team || team.status !== 'ACTIVE') {
-    throw httpError.badRequest('Team is not available.')
+  const team = await prisma.team.findUnique({ where: { id: teamId } });
+  if (!team || team.status !== "ACTIVE") {
+    throw httpError.badRequest("Team is not available.");
   }
   if (departmentId && team.departmentId !== departmentId) {
-    throw httpError.badRequest('Team must belong to the selected department.')
+    throw httpError.badRequest("Team must belong to the selected department.");
   }
-  return team
+  return team;
 }
 
 function serializeUser(
-  user: Prisma.UserGetPayload<{ include: typeof userDetailInclude }> | Prisma.UserGetPayload<{ include: typeof userListInclude }>,
+  user:
+    | Prisma.UserGetPayload<{ include: typeof userDetailInclude }>
+    | Prisma.UserGetPayload<{ include: typeof userListInclude }>,
   extra: Record<string, unknown> = {},
 ) {
-  const detail = 'dataScopes' in user ? user : null
+  const detail = "dataScopes" in user ? user : null;
+  const photoUrl = versionedPhotoUrl(user.photoUrl, user.updatedAt);
 
   return {
     id: user.id,
@@ -178,31 +214,54 @@ function serializeUser(
     mobile: user.mobile,
     status: user.status,
     role: user.primaryRole
-      ? { id: user.primaryRole.id, key: user.primaryRole.key, name: user.primaryRole.name, status: user.primaryRole.status }
+      ? {
+          id: user.primaryRole.id,
+          key: user.primaryRole.key,
+          name: user.primaryRole.name,
+          status: user.primaryRole.status,
+        }
       : null,
-    department: user.department ? { id: user.department.id, name: user.department.name } : null,
+    department: user.department
+      ? { id: user.department.id, name: user.department.name }
+      : null,
     team: user.team ? { id: user.team.id, name: user.team.name } : null,
-    photoUrl: user.photoUrl,
+    photoUrl,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
-    acceptsLeadAssignment: user.status === 'ACTIVE',
+    acceptsLeadAssignment: user.status === "ACTIVE",
     inactiveOwnerLeadCount: 0,
     dataScopes: detail
-      ? Object.fromEntries(detail.dataScopes.map((row) => [row.resource, row.scope]))
+      ? Object.fromEntries(
+          detail.dataScopes.map((row) => [row.resource, row.scope]),
+        )
       : undefined,
     ...extra,
+  };
+}
+
+function versionedPhotoUrl(photoUrl: string | null | undefined, updatedAt?: Date | null) {
+  if (!photoUrl) {
+    return null;
   }
+  // Local photo routes always reuse the same path; bust browser cache after replacements.
+  if (!photoUrl.startsWith("/")) {
+    return photoUrl;
+  }
+  const version = updatedAt ? new Date(updatedAt).getTime() : Date.now();
+  const parsed = new URL(photoUrl, "http://local.invalid");
+  parsed.searchParams.set("v", String(version));
+  return `${parsed.pathname}?${parsed.searchParams.toString()}`;
 }
 
 export async function listUsers(
   auth: AuthContext,
   query: {
-    search?: string
-    roleId?: string
-    departmentId?: string
-    teamId?: string
-    status?: string
+    search?: string;
+    roleId?: string;
+    departmentId?: string;
+    teamId?: string;
+    status?: string;
   },
 ) {
   const where: Prisma.UserWhereInput = {
@@ -211,9 +270,9 @@ export async function listUsers(
       query.search
         ? {
             OR: [
-              { fullName: { contains: query.search, mode: 'insensitive' } },
-              { email: { contains: query.search, mode: 'insensitive' } },
-              { username: { contains: query.search, mode: 'insensitive' } },
+              { fullName: { contains: query.search, mode: "insensitive" } },
+              { email: { contains: query.search, mode: "insensitive" } },
+              { username: { contains: query.search, mode: "insensitive" } },
               { mobile: { contains: query.search } },
             ],
           }
@@ -221,43 +280,91 @@ export async function listUsers(
       query.roleId ? { primaryRoleId: query.roleId } : {},
       query.departmentId ? { departmentId: query.departmentId } : {},
       query.teamId ? { teamId: query.teamId } : {},
-      query.status && ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED'].includes(query.status)
+      query.status &&
+      ["ACTIVE", "INACTIVE", "SUSPENDED", "INVITED"].includes(query.status)
         ? { status: query.status as UserStatus }
         : {},
     ],
-  }
+  };
 
   const users = await prisma.user.findMany({
     where,
     include: userListInclude,
-    orderBy: { fullName: 'asc' },
-  })
+    orderBy: { fullName: "asc" },
+  });
 
-  return users.map((user) => serializeUser(user))
+  return users.map((user) => serializeUser(user));
+}
+
+function userStatusLabel(status: string) {
+  if (status === "INACTIVE") return "Inactive";
+  if (status === "SUSPENDED") return "Suspended";
+  if (status === "INVITED") return "Invited";
+  if (status === "ACTIVE") return "Active";
+  return status;
+}
+
+export async function exportUsersTable(
+  auth: AuthContext,
+  query: {
+    search?: string;
+    roleId?: string;
+    departmentId?: string;
+    teamId?: string;
+    status?: string;
+  },
+): Promise<TabularExport> {
+  const users = await listUsers(auth, query);
+  return {
+    title: "Users",
+    fileName: `users-${exportFileStamp()}.xlsx`,
+    columns: [
+      { header: "Name", key: "name", width: 28 },
+      { header: "Email", key: "email", width: 32 },
+      { header: "Mobile", key: "mobile", width: 18 },
+      { header: "Username", key: "username", width: 18 },
+      { header: "Role", key: "role", width: 20 },
+      { header: "Department", key: "department", width: 22 },
+      { header: "Team", key: "team", width: 18 },
+      { header: "Status", key: "status", width: 14 },
+      { header: "Created at", key: "createdAt", width: 22 },
+    ],
+    rows: users.map((user) => ({
+      name: exportCell(user.fullName),
+      email: exportCell(user.email),
+      mobile: exportCell(user.mobile),
+      username: exportCell(user.username),
+      role: exportCell(user.role?.name),
+      department: exportCell(user.department?.name),
+      team: exportCell(user.team?.name),
+      status: userStatusLabel(user.status),
+      createdAt: formatExportDateTime(user.createdAt),
+    })),
+  };
 }
 
 export async function getUser(auth: AuthContext, id: string) {
-  await assertCanViewUser(auth, id)
+  await assertCanViewUser(auth, id);
   const user = await prisma.user.findUnique({
     where: { id },
     include: userDetailInclude,
-  })
+  });
   if (!user) {
-    throw httpError.notFound('User not found.')
+    throw httpError.notFound("User not found.");
   }
-  return serializeUser(user)
+  return serializeUser(user);
 }
 
 async function applyUserPhoto(userId: string, photo?: Express.Multer.File) {
   if (!photo) {
-    return null
+    return null;
   }
-  const saved = await saveUserProfilePhoto(userId, photo)
+  const saved = await saveUserProfilePhoto(userId, photo);
   await prisma.user.update({
     where: { id: userId },
     data: { photoUrl: saved.url },
-  })
-  return saved.url
+  });
+  return saved.url;
 }
 
 export async function createUser(
@@ -266,40 +373,45 @@ export async function createUser(
   meta: { ipAddress?: string; userAgent?: string },
   photo?: Express.Multer.File,
 ) {
-  const fullName = typeof input.fullName === 'string' ? input.fullName.trim() : ''
-  const email = typeof input.email === 'string' ? normalizeEmail(input.email) : ''
-  const username = typeof input.username === 'string' ? normalizeUsername(input.username) : ''
-  const mobile = parseMobile(input.mobile)
-  const password = typeof input.password === 'string' ? input.password : ''
+  const fullName =
+    typeof input.fullName === "string" ? input.fullName.trim() : "";
+  const email =
+    typeof input.email === "string" ? normalizeEmail(input.email) : "";
+  const username =
+    typeof input.username === "string" ? normalizeUsername(input.username) : "";
+  const mobile = parseMobile(input.mobile);
+  const password = typeof input.password === "string" ? input.password : "";
   const requestedStatus =
-    input.status === 'INACTIVE' || input.status === 'SUSPENDED' || input.status === 'INVITED'
+    input.status === "INACTIVE" ||
+    input.status === "SUSPENDED" ||
+    input.status === "INVITED"
       ? (input.status as UserStatus)
-      : 'ACTIVE'
+      : "ACTIVE";
   // Industrial invite flow: accounts without an admin-set password start as INVITED.
-  const status: UserStatus = password ? requestedStatus : 'INVITED'
+  const status: UserStatus = password ? requestedStatus : "INVITED";
 
   if (fullName.length < 2 || fullName.length > 100) {
-    throw httpError.badRequest('Full name must be 2–100 characters.')
+    throw httpError.badRequest("Full name must be 2–100 characters.");
   }
   if (!isValidEmail(email)) {
-    throw httpError.badRequest('Please enter a valid email.')
+    throw httpError.badRequest("Please enter a valid email.");
   }
   if (!isValidMobile(mobile)) {
-    throw httpError.badRequest('Please enter a valid mobile number.')
+    throw httpError.badRequest("Please enter a valid mobile number.");
   }
   if (!username) {
-    throw httpError.badRequest('Username is required.')
+    throw httpError.badRequest("Username is required.");
   }
   if (password && password.length < config.minPasswordLength) {
-    throw httpError.badRequest(`Password must be at least ${config.minPasswordLength} characters.`)
+    throw httpError.badRequest(
+      `Password must be at least ${config.minPasswordLength} characters.`,
+    );
   }
 
-  const role = await resolveRole(input.roleId)
-  const department = await resolveDepartment(input.departmentId)
-  const team = await resolveTeam(input.teamId, department?.id ?? null)
-  const passwordHash = await hashPassword(
-    password || randomTempPassword(),
-  )
+  const role = await resolveRole(input.roleId);
+  const department = await resolveDepartment(input.departmentId);
+  const team = await resolveTeam(input.teamId, department?.id ?? null);
+  const passwordHash = await hashPassword(password || randomTempPassword());
 
   try {
     const user = await prisma.user.create({
@@ -315,16 +427,16 @@ export async function createUser(
         teamId: team?.id ?? null,
       },
       include: userDetailInclude,
-    })
+    });
 
-    const scopes = defaultScopesForRole(role.key)
+    const scopes = defaultScopesForRole(role.key);
     await prisma.userDataScope.createMany({
       data: Object.entries(scopes).map(([resource, scope]) => ({
         userId: user.id,
         resource,
         scope,
       })),
-    })
+    });
 
     await prisma.roleHistory.create({
       data: {
@@ -332,44 +444,44 @@ export async function createUser(
         toRoleId: role.id,
         changedById: auth.user.id,
       },
-    })
+    });
 
-    await applyUserPhoto(user.id, photo)
+    await applyUserPhoto(user.id, photo);
 
     await writeAuditLog({
       userId: auth.user.id,
-      action: 'USER_CREATED',
-      entityType: 'user',
+      action: "USER_CREATED",
+      entityType: "user",
       entityId: user.id,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
       metadata: { email, username, role: role.key },
-    })
+    });
 
-    let reset: Record<string, unknown> | undefined
+    let reset: Record<string, unknown> | undefined;
     if (!password) {
       const invited = await sendAccountInvite({
         userId: user.id,
         actorId: auth.user.id,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
-      })
-      reset = invited.body
+      });
+      reset = invited.body;
     }
 
     const created = await prisma.user.findUniqueOrThrow({
       where: { id: user.id },
       include: userDetailInclude,
-    })
+    });
 
-    return { user: serializeUser(created), reset }
+    return { user: serializeUser(created), reset };
   } catch (error) {
-    rethrowUnique(error)
+    rethrowUnique(error);
   }
 }
 
 function randomTempPassword() {
-  return `Tmp!${Math.random().toString(36).slice(2, 10)}A1`
+  return `Tmp!${Math.random().toString(36).slice(2, 10)}A1`;
 }
 
 export async function updateUser(
@@ -382,83 +494,93 @@ export async function updateUser(
   const existing = await prisma.user.findUnique({
     where: { id },
     include: { primaryRole: true },
-  })
+  });
   if (!existing) {
-    throw httpError.notFound('User not found.')
+    throw httpError.notFound("User not found.");
   }
 
-  const data: Prisma.UserUpdateInput = {}
-  const changes: Record<string, unknown> = {}
-  let resentInviteEmail: string | null = null
+  const data: Prisma.UserUpdateInput = {};
+  const changes: Record<string, unknown> = {};
+  let resentInviteEmail: string | null = null;
 
-  if (typeof input.fullName === 'string') {
-    const fullName = input.fullName.trim()
+  if (typeof input.fullName === "string") {
+    const fullName = input.fullName.trim();
     if (fullName.length < 2 || fullName.length > 100) {
-      throw httpError.badRequest('Full name must be 2–100 characters.')
+      throw httpError.badRequest("Full name must be 2–100 characters.");
     }
-    data.fullName = fullName
-    changes.fullName = fullName
+    data.fullName = fullName;
+    changes.fullName = fullName;
   }
 
-  if (typeof input.email === 'string') {
-    const email = normalizeEmail(input.email)
+  if (typeof input.email === "string") {
+    const email = normalizeEmail(input.email);
     if (!isValidEmail(email)) {
-      throw httpError.badRequest('Please enter a valid email.')
+      throw httpError.badRequest("Please enter a valid email.");
     }
     if (email !== normalizeEmail(existing.email)) {
-      if (existing.status !== 'INVITED') {
-        throw httpError.badRequest('Email can only be changed while the account is still invited.')
+      if (existing.status !== "INVITED") {
+        throw httpError.badRequest(
+          "Email can only be changed while the account is still invited.",
+        );
       }
-      data.email = email
-      changes.email = email
-      resentInviteEmail = email
+      data.email = email;
+      changes.email = email;
+      resentInviteEmail = email;
     }
   }
 
-  if (typeof input.username === 'string') {
-    const username = normalizeUsername(input.username)
+  if (typeof input.username === "string") {
+    const username = normalizeUsername(input.username);
     if (!username) {
-      throw httpError.badRequest('Username is required.')
+      throw httpError.badRequest("Username is required.");
     }
-    data.username = username
-    changes.username = username
+    data.username = username;
+    changes.username = username;
   }
 
-  if (typeof input.mobile === 'string') {
-    const mobile = parseMobile(input.mobile)
+  if (typeof input.mobile === "string") {
+    const mobile = parseMobile(input.mobile);
     if (!isValidMobile(mobile)) {
-      throw httpError.badRequest('Please enter a valid mobile number.')
+      throw httpError.badRequest("Please enter a valid mobile number.");
     }
-    data.mobile = mobile
-    changes.mobile = mobile
+    data.mobile = mobile;
+    changes.mobile = mobile;
   }
 
   if (input.departmentId !== undefined) {
-    const department = await resolveDepartment(input.departmentId)
-    data.department = department ? { connect: { id: department.id } } : { disconnect: true }
-    changes.departmentId = department?.id ?? null
+    const department = await resolveDepartment(input.departmentId);
+    data.department = department
+      ? { connect: { id: department.id } }
+      : { disconnect: true };
+    changes.departmentId = department?.id ?? null;
   }
 
   if (input.teamId !== undefined) {
     const departmentId =
       input.departmentId === undefined
         ? existing.departmentId
-        : typeof input.departmentId === 'string' && input.departmentId
+        : typeof input.departmentId === "string" && input.departmentId
           ? input.departmentId
-          : null
-    const team = await resolveTeam(input.teamId, departmentId)
-    data.team = team ? { connect: { id: team.id } } : { disconnect: true }
-    changes.teamId = team?.id ?? null
+          : null;
+    const team = await resolveTeam(input.teamId, departmentId);
+    data.team = team ? { connect: { id: team.id } } : { disconnect: true };
+    changes.teamId = team?.id ?? null;
   }
 
-  if (typeof input.roleId === 'string' && input.roleId !== existing.primaryRoleId) {
-    if (id === auth.user.id && !auth.permissions.includes('permission:configure')) {
-      throw httpError.accessDenied()
+  if (
+    typeof input.roleId === "string" &&
+    input.roleId !== existing.primaryRoleId
+  ) {
+    if (
+      id === auth.user.id &&
+      !auth.permissions.includes("permission:configure")
+    ) {
+      throw httpError.accessDenied();
     }
-    const role = await resolveRole(input.roleId)
-    await assertNotLastAdmin(id, existing.status, role.id)
-    data.primaryRole = { connect: { id: role.id } }
-    changes.roleId = role.id
+    const role = await resolveRole(input.roleId);
+    await assertNotLastAdmin(id, existing.status, role.id);
+    data.primaryRole = { connect: { id: role.id } };
+    changes.roleId = role.id;
 
     await prisma.roleHistory.create({
       data: {
@@ -467,42 +589,42 @@ export async function updateUser(
         toRoleId: role.id,
         changedById: auth.user.id,
       },
-    })
+    });
 
-    const scopes = defaultScopesForRole(role.key)
+    const scopes = defaultScopesForRole(role.key);
     for (const [resource, scope] of Object.entries(scopes)) {
       await prisma.userDataScope.upsert({
         where: { userId_resource: { userId: id, resource } },
         update: { scope },
         create: { userId: id, resource, scope },
-      })
+      });
     }
 
     await writeAuditLog({
       userId: auth.user.id,
-      action: 'USER_ROLE_CHANGED',
-      entityType: 'user',
+      action: "USER_ROLE_CHANGED",
+      entityType: "user",
       entityId: id,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
       metadata: { from: existing.primaryRole?.key ?? null, to: role.key },
-    })
+    });
   }
 
   try {
     await prisma.user.update({
       where: { id },
       data,
-    })
+    });
     if (resentInviteEmail) {
       await prisma.employee.updateMany({
         where: { userId: id },
         data: { officialEmail: resentInviteEmail },
-      })
+      });
     }
-    await applyUserPhoto(id, photo)
+    await applyUserPhoto(id, photo);
 
-    let reset: Record<string, unknown> | undefined
+    let reset: Record<string, unknown> | undefined;
     if (resentInviteEmail) {
       const invited = await sendAccountInvite({
         userId: id,
@@ -510,28 +632,28 @@ export async function updateUser(
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
         resent: true,
-      })
-      reset = invited.body
+      });
+      reset = invited.body;
     }
 
     const user = await prisma.user.findUniqueOrThrow({
       where: { id },
       include: userDetailInclude,
-    })
+    });
 
     await writeAuditLog({
       userId: auth.user.id,
-      action: 'USER_UPDATED',
-      entityType: 'user',
+      action: "USER_UPDATED",
+      entityType: "user",
       entityId: id,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
       metadata: changes as Prisma.InputJsonValue,
-    })
+    });
 
-    return { user: serializeUser(user), reset }
+    return { user: serializeUser(user), reset };
   } catch (error) {
-    rethrowUnique(error)
+    rethrowUnique(error);
   }
 }
 
@@ -542,31 +664,42 @@ export async function updateUserPhoto(
   meta: { ipAddress?: string; userAgent?: string },
 ) {
   if (!file) {
-    throw httpError.invalidUpload('Please select a profile photo.')
+    throw httpError.invalidUpload("Please select a profile photo.");
   }
 
-  const existing = await prisma.user.findUnique({ where: { id } })
+  const existing = await prisma.user.findUnique({ where: { id } });
   if (!existing) {
-    throw httpError.notFound('User not found.')
+    throw httpError.notFound("User not found.");
   }
 
-  await applyUserPhoto(id, file)
+  await applyUserPhoto(id, file);
   const user = await prisma.user.findUniqueOrThrow({
     where: { id },
     include: userDetailInclude,
-  })
+  });
 
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'USER_UPDATED',
-    entityType: 'user',
+    action: "USER_UPDATED",
+    entityType: "user",
     entityId: id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { photo: true },
-  })
+  });
 
-  return serializeUser(user)
+  return serializeUser(user);
+}
+
+export async function getUserPhoto(_auth: AuthContext, id: string) {
+  const user = await prisma.user.findUnique({
+    where: { id },
+    select: { photoUrl: true },
+  });
+  if (!user?.photoUrl) {
+    throw httpError.notFound("Profile photo not found.");
+  }
+  return readUserProfilePhoto(id, user.photoUrl);
 }
 
 export async function updateUserStatus(
@@ -575,53 +708,55 @@ export async function updateUserStatus(
   status: UserStatus,
   meta: { ipAddress?: string; userAgent?: string },
 ) {
-  if (!['ACTIVE', 'INACTIVE', 'SUSPENDED', 'INVITED'].includes(status)) {
-    throw httpError.badRequest('Invalid status.')
+  if (!["ACTIVE", "INACTIVE", "SUSPENDED", "INVITED"].includes(status)) {
+    throw httpError.badRequest("Invalid status.");
   }
 
-  const existing = await prisma.user.findUnique({ where: { id } })
+  const existing = await prisma.user.findUnique({ where: { id } });
   if (!existing) {
-    throw httpError.notFound('User not found.')
+    throw httpError.notFound("User not found.");
   }
-  if (existing.status === 'INVITED' && status === 'ACTIVE') {
-    throw httpError.badRequest('Invited users must set a password from their email link before becoming Active.')
+  if (existing.status === "INVITED" && status === "ACTIVE") {
+    throw httpError.badRequest(
+      "Invited users must set a password from their email link before becoming Active.",
+    );
   }
-  if (status === 'INVITED' && existing.status !== 'INVITED') {
-    throw httpError.badRequest('Only new accounts can be marked as Invited.')
+  if (status === "INVITED" && existing.status !== "INVITED") {
+    throw httpError.badRequest("Only new accounts can be marked as Invited.");
   }
 
-  await assertNotLastAdmin(id, status)
+  await assertNotLastAdmin(id, status);
 
   const user = await prisma.user.update({
     where: { id },
     data: { status },
     include: userDetailInclude,
-  })
+  });
 
-  if (status !== 'ACTIVE') {
-    await revokeUserSessions(id)
+  if (status !== "ACTIVE") {
+    await revokeUserSessions(id);
   }
 
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'USER_STATUS_CHANGED',
-    entityType: 'user',
+    action: "USER_STATUS_CHANGED",
+    entityType: "user",
     entityId: id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
-    metadata: { status, acceptsLeadAssignment: status === 'ACTIVE' },
-  })
+    metadata: { status, acceptsLeadAssignment: status === "ACTIVE" },
+  });
 
-  return serializeUser(user)
+  return serializeUser(user);
 }
 
 export async function listUserSessions(auth: AuthContext, id: string) {
-  await assertCanViewUser(auth, id)
+  await assertCanViewUser(auth, id);
   const sessions = await prisma.session.findMany({
     where: { userId: id },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { createdAt: "desc" },
     take: 50,
-  })
+  });
 
   return sessions.map((session) => ({
     id: session.id,
@@ -633,7 +768,7 @@ export async function listUserSessions(auth: AuthContext, id: string) {
     revokedAt: session.revokedAt,
     current: session.id === auth.sessionId,
     active: !session.revokedAt && session.expiresAt > new Date(),
-  }))
+  }));
 }
 
 export async function forceLogoutSession(
@@ -644,27 +779,27 @@ export async function forceLogoutSession(
 ) {
   const session = await prisma.session.findFirst({
     where: { id: sessionId, userId },
-  })
+  });
 
   if (!session || session.revokedAt) {
-    throw httpError.sessionError()
+    throw httpError.sessionError();
   }
 
   try {
-    await revokeSession(session.id)
+    await revokeSession(session.id);
   } catch {
-    throw httpError.sessionError()
+    throw httpError.sessionError();
   }
 
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'SESSION_TERMINATED',
-    entityType: 'user',
+    action: "SESSION_TERMINATED",
+    entityType: "user",
     entityId: userId,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { sessionId },
-  })
+  });
 }
 
 export async function forceLogoutAll(
@@ -672,16 +807,16 @@ export async function forceLogoutAll(
   userId: string,
   meta: { ipAddress?: string; userAgent?: string },
 ) {
-  await revokeUserSessions(userId)
+  await revokeUserSessions(userId);
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'SESSION_TERMINATED',
-    entityType: 'user',
+    action: "SESSION_TERMINATED",
+    entityType: "user",
     entityId: userId,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { all: true },
-  })
+  });
 }
 
 export async function setUserOverrides(
@@ -691,48 +826,65 @@ export async function setUserOverrides(
   meta: { ipAddress?: string; userAgent?: string },
 ) {
   if (auth.user.id === userId) {
-    throw httpError.accessDenied()
+    throw httpError.accessDenied();
   }
 
   if (!Array.isArray(overrides)) {
-    throw httpError.badRequest('Invalid permission override payload.')
+    throw httpError.badRequest("Invalid permission override payload.");
   }
 
   const existing = await prisma.user.findUnique({
     where: { id: userId },
     include: { permissionOverrides: { include: { permission: true } } },
-  })
+  });
   if (!existing) {
-    throw httpError.notFound('User not found.')
+    throw httpError.notFound("User not found.");
   }
 
-  const previous = new Map(existing.permissionOverrides.map((row) => [row.permissionId, row]))
-  const nextRows: Array<{ permissionId: string; effect: 'ALLOW' | 'DENY'; resource: string; action: string }> = []
+  const previous = new Map(
+    existing.permissionOverrides.map((row) => [row.permissionId, row]),
+  );
+  const nextRows: Array<{
+    permissionId: string;
+    effect: "ALLOW" | "DENY";
+    resource: string;
+    action: string;
+  }> = [];
 
   for (const item of overrides) {
-    if (!item || typeof item !== 'object') {
-      continue
+    if (!item || typeof item !== "object") {
+      continue;
     }
-    const row = item as { permissionId?: string; effect?: string }
-    if (!row.permissionId || (row.effect !== 'ALLOW' && row.effect !== 'DENY')) {
-      continue
+    const row = item as { permissionId?: string; effect?: string };
+    if (
+      !row.permissionId ||
+      (row.effect !== "ALLOW" && row.effect !== "DENY")
+    ) {
+      continue;
     }
-    const permission = await prisma.permission.findUnique({ where: { id: row.permissionId } })
+    const permission = await prisma.permission.findUnique({
+      where: { id: row.permissionId },
+    });
     if (!permission) {
-      throw httpError.invalidPermission()
+      throw httpError.invalidPermission();
     }
     nextRows.push({
       permissionId: permission.id,
       effect: row.effect,
       resource: permission.resource,
       action: permission.action,
-    })
+    });
   }
 
-  const historyChanges: Array<{ resource: string; action: string; from: string; to: string }> = []
+  const historyChanges: Array<{
+    resource: string;
+    action: string;
+    from: string;
+    to: string;
+  }> = [];
 
   await prisma.$transaction(async (tx) => {
-    await tx.userPermissionOverride.deleteMany({ where: { userId } })
+    await tx.userPermissionOverride.deleteMany({ where: { userId } });
     if (nextRows.length > 0) {
       await tx.userPermissionOverride.createMany({
         data: nextRows.map((row) => ({
@@ -740,11 +892,12 @@ export async function setUserOverrides(
           permissionId: row.permissionId,
           effect: row.effect,
         })),
-      })
+      });
     }
 
     for (const row of nextRows) {
-      const previousEffect = previous.get(row.permissionId)?.effect ?? 'ROLE_DEFAULT'
+      const previousEffect =
+        previous.get(row.permissionId)?.effect ?? "ROLE_DEFAULT";
       if (previousEffect !== row.effect) {
         await tx.permissionHistory.create({
           data: {
@@ -754,47 +907,49 @@ export async function setUserOverrides(
             newEffect: row.effect,
             changedById: auth.user.id,
           },
-        })
+        });
         historyChanges.push({
           resource: row.resource,
           action: row.action,
           from: String(previousEffect),
           to: row.effect,
-        })
+        });
       }
     }
 
     for (const [permissionId, row] of previous) {
-      if (nextRows.some((next) => next.permissionId === permissionId)) continue
+      if (nextRows.some((next) => next.permissionId === permissionId)) continue;
       await tx.permissionHistory.create({
         data: {
           userId,
           permissionId,
           previousEffect: String(row.effect),
-          newEffect: 'ROLE_DEFAULT',
+          newEffect: "ROLE_DEFAULT",
           changedById: auth.user.id,
         },
-      })
+      });
       historyChanges.push({
         resource: row.permission.resource,
         action: row.permission.action,
         from: String(row.effect),
-        to: 'ROLE_DEFAULT',
-      })
+        to: "ROLE_DEFAULT",
+      });
     }
-  })
+  });
 
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'USER_PERMISSION_OVERRIDE_CHANGED',
-    entityType: 'user',
+    action: "USER_PERMISSION_OVERRIDE_CHANGED",
+    entityType: "user",
     entityId: userId,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { overrides: nextRows },
-  })
+  });
 
-  const criticalChanges = historyChanges.filter((change) => isCriticalPermission(change.resource, change.action))
+  const criticalChanges = historyChanges.filter((change) =>
+    isCriticalPermission(change.resource, change.action),
+  );
   if (criticalChanges.length > 0) {
     await notifyCriticalPermissionChanges({
       userIds: [userId],
@@ -804,10 +959,10 @@ export async function setUserOverrides(
         from: effectLabel(change.from),
         to: effectLabel(change.to),
       })),
-    })
+    });
   }
 
-  return getUser(auth, userId)
+  return getUser(auth, userId);
 }
 
 export async function setUserScopes(
@@ -816,44 +971,44 @@ export async function setUserScopes(
   scopes: unknown,
   meta: { ipAddress?: string; userAgent?: string },
 ) {
-  if (!scopes || typeof scopes !== 'object') {
-    throw httpError.badRequest('Invalid data scope payload.')
+  if (!scopes || typeof scopes !== "object") {
+    throw httpError.badRequest("Invalid data scope payload.");
   }
 
-  const entries = Object.entries(scopes as Record<string, string>)
-  const allowed: DataScope[] = ['OWN', 'TEAM', 'DEPARTMENT', 'ALL']
+  const entries = Object.entries(scopes as Record<string, string>);
+  const allowed: DataScope[] = ["OWN", "TEAM", "DEPARTMENT", "ALL"];
 
   for (const [resource, scope] of entries) {
     if (!allowed.includes(scope as DataScope)) {
-      throw httpError.badRequest('Invalid data scope.')
+      throw httpError.badRequest("Invalid data scope.");
     }
     await prisma.userDataScope.upsert({
       where: { userId_resource: { userId, resource } },
       update: { scope: scope as DataScope },
       create: { userId, resource, scope: scope as DataScope },
-    })
+    });
   }
 
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'USER_DATA_SCOPE_CHANGED',
-    entityType: 'user',
+    action: "USER_DATA_SCOPE_CHANGED",
+    entityType: "user",
     entityId: userId,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: scopes as Prisma.InputJsonValue,
-  })
+  });
 
-  return getUser(auth, userId)
+  return getUser(auth, userId);
 }
 
 export async function listUserActivity(auth: AuthContext, userId: string) {
-  await assertCanViewUser(auth, userId)
+  await assertCanViewUser(auth, userId);
   return prisma.auditLog.findMany({
     where: {
-      OR: [{ userId }, { entityType: 'user', entityId: userId }],
+      OR: [{ userId }, { entityType: "user", entityId: userId }],
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy: { createdAt: "desc" },
     take: 100,
-  })
+  });
 }

@@ -1,15 +1,19 @@
 import { Router, type NextFunction, type Request, type Response } from 'express'
 import multer from 'multer'
 import type { UserStatus } from '../../lib/prisma-client'
+import { writeAuditLog } from '../../lib/audit'
 import { httpError } from '../../lib/http-error'
 import { requestIp, requestUserAgent, routeParam } from '../../lib/request'
+import { respondWithExport } from '../../lib/xlsx-export'
 import { requestPasswordReset, sendAccountInvite } from '../auth/password-reset.service'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
   createUser,
+  exportUsersTable,
   forceLogoutAll,
   forceLogoutSession,
   getUser,
+  getUserPhoto,
   listUserActivity,
   listUserSessions,
   listUsers,
@@ -50,6 +54,32 @@ usersRouter.get('/', requirePermission('user:view'), async (req, res, next) => {
       status: typeof req.query.status === 'string' ? req.query.status : undefined,
     })
     res.json({ users })
+  } catch (error) {
+    next(error)
+  }
+})
+
+usersRouter.get('/export', requirePermission('user:view'), async (req, res, next) => {
+  try {
+    const table = await exportUsersTable(req.auth!, {
+      search: typeof req.query.search === 'string' ? req.query.search : undefined,
+      roleId: typeof req.query.roleId === 'string' ? req.query.roleId : undefined,
+      departmentId: typeof req.query.departmentId === 'string' ? req.query.departmentId : undefined,
+      teamId: typeof req.query.teamId === 'string' ? req.query.teamId : undefined,
+      status: typeof req.query.status === 'string' ? req.query.status : undefined,
+    })
+    await writeAuditLog({
+      userId: req.auth!.user.id,
+      action: 'USERS_EXPORTED',
+      entityType: 'user',
+      ipAddress: requestIp(req),
+      userAgent: requestUserAgent(req),
+      metadata: {
+        format: req.query.format === 'json' ? 'json' : 'xlsx',
+        count: table.rows.length,
+      },
+    })
+    await respondWithExport(res, req.query.format, table)
   } catch (error) {
     next(error)
   }
@@ -106,6 +136,18 @@ usersRouter.post('/:id/photo', requirePermission('user:edit'), acceptPhoto, asyn
       userAgent: requestUserAgent(req),
     })
     res.json({ user })
+  } catch (error) {
+    next(error)
+  }
+})
+
+usersRouter.get('/:id/photo', requireAuth, async (req, res, next) => {
+  try {
+    const file = await getUserPhoto(req.auth!, routeParam(req.params.id))
+    res.setHeader('Content-Type', file.contentType)
+    res.setHeader('Cache-Control', 'private, no-cache, must-revalidate')
+    res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`)
+    res.send(file.buffer)
   } catch (error) {
     next(error)
   }

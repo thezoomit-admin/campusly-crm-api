@@ -20,9 +20,18 @@ import {
   normalizePhone,
   titleCaseName,
 } from '../leads/leads.helpers'
+import { createLeadDocumentFromEmailAttachment } from '../leads/leads.documents'
 import { assignLead } from '../leads/leads.service'
 import { createNotification } from '../notifications/notifications.service'
-import { EmailProviderError, isEmailConfigured, isEmailMockMode, mailboxAddress, sendMailboxEmail } from './email.client'
+import { emitEmailInbound } from '../../realtime/socket'
+import {
+  EmailProviderError,
+  isEmailConfigured,
+  isEmailMockMode,
+  isImapInboundConfigured,
+  mailboxAddress,
+  sendMailboxEmail,
+} from './email.client'
 import {
   ATTACHMENT_UPLOAD_ERROR,
   EMAIL_DOC_CATEGORIES,
@@ -102,6 +111,11 @@ export type InboundEmailInput = {
   phone?: string | null
   eventAt?: Date | null
   attachments?: InboundAttachment[]
+  /**
+   * IMAP sync: only continue CRM conversations (we emailed this address first).
+   * Skips cold/newsletter mail and only notifies on student replies.
+   */
+  conversationOnly?: boolean
 }
 
 const threadInclude = {
@@ -476,7 +490,13 @@ async function getOrCreateThread(email: string, contactName: string | null, subj
 }
 
 async function storeInboundFiles(threadId: string, files: InboundAttachment[]) {
-  const stored: Array<{ url: string; mimeType: string; fileName: string; fileSize: number | null }> = []
+  const stored: Array<{
+    url: string
+    mimeType: string
+    fileName: string
+    fileSize: number | null
+    buffer?: Buffer
+  }> = []
   let failed = false
   for (const file of files) {
     try {
@@ -499,13 +519,181 @@ async function storeInboundFiles(threadId: string, files: InboundAttachment[]) {
         mimeType: mime,
         fileName: file.fileName,
       })
-      stored.push(saved)
+      stored.push({ ...saved, buffer })
     } catch (error) {
       failed = true
       console.error('[email] inbound attachment failed:', error)
     }
   }
   return { stored, failed }
+}
+
+async function recordCrmEmailCommunication(input: {
+  leadId: string
+  direction: 'incoming' | 'outgoing'
+  subject: string
+  message: string | null
+  senderName: string | null
+  senderEmail: string
+  externalId: string
+  eventAt?: Date
+  formName?: string
+}) {
+  try {
+    const existing = await prisma.communicationEvent.findUnique({
+      where: { channel_externalId: { channel: 'EMAIL', externalId: input.externalId } },
+      select: { id: true },
+    })
+    if (existing) {
+      await prisma.emailMessage
+        .updateMany({
+          where: { id: input.externalId.replace(/^crm-email:/, ''), communicationEventId: null },
+          data: { communicationEventId: existing.id },
+        })
+        .catch(() => undefined)
+      return existing.id
+    }
+
+    const event = await prisma.communicationEvent.create({
+      data: {
+        channel: 'EMAIL',
+        eventAt: input.eventAt || new Date(),
+        senderName: input.senderName,
+        senderEmail: input.senderEmail.toLowerCase(),
+        subject: input.subject.slice(0, 300),
+        message: (input.message || '').slice(0, 5000) || null,
+        sourceCode: 'EMAIL_CRM',
+        channelCode: 'EMAIL',
+        direction: input.direction,
+        externalId: input.externalId,
+        formName: input.formName || 'CRM Email',
+        processingStatus: 'PROCESSED',
+        processedAt: new Date(),
+        leadId: input.leadId,
+        leadCreated: false,
+      },
+    })
+
+    const messageId = input.externalId.startsWith('crm-email:')
+      ? input.externalId.slice('crm-email:'.length)
+      : null
+    if (messageId) {
+      await prisma.emailMessage
+        .updateMany({
+          where: { id: messageId, communicationEventId: null },
+          data: { communicationEventId: event.id },
+        })
+        .catch(() => undefined)
+    }
+    return event.id
+  } catch (error) {
+    console.error('[email] recordCrmEmailCommunication failed:', error)
+    return null
+  }
+}
+
+async function copyAttachmentsToLeadDocuments(input: {
+  leadId: string
+  leadName: string
+  messageId: string
+  uploadedById: string
+  files: Array<{
+    buffer?: Buffer
+    mimeType: string
+    fileName: string
+    category?: string | null
+  }>
+}) {
+  let created = 0
+  for (const file of input.files) {
+    if (!file.buffer?.length) continue
+    const result = await createLeadDocumentFromEmailAttachment({
+      leadId: input.leadId,
+      leadName: input.leadName,
+      buffer: file.buffer,
+      mimeType: file.mimeType,
+      fileName: file.fileName,
+      messageId: input.messageId,
+      category: file.category,
+      uploadedById: input.uploadedById,
+    })
+    if (result.created) created += 1
+  }
+  return created
+}
+
+/** Marks a previously sent CRM email as bounced (DSN / mailer-daemon). */
+export async function markOutboundBounced(input: {
+  providerMessageIds: string[]
+  errorMessage?: string
+  eventAt?: Date
+}) {
+  const ids = [...new Set(input.providerMessageIds.map((id) => id.trim()).filter(Boolean))]
+  if (!ids.length) return { matched: false as const }
+
+  const message = await prisma.emailMessage.findFirst({
+    where: {
+      direction: 'outgoing',
+      providerMessageId: { in: ids },
+      NOT: { deliveryStatus: 'bounced' },
+    },
+    include: {
+      thread: {
+        select: {
+          id: true,
+          assignedUserId: true,
+          leadId: true,
+          lead: { select: { id: true, name: true, code: true, ownerId: true } },
+        },
+      },
+    },
+    orderBy: { sentAt: 'desc' },
+  })
+  if (!message) return { matched: false as const }
+
+  const errorMessage = (input.errorMessage || 'Delivery failed — bounce received from mail server.').slice(0, 500)
+  await prisma.emailMessage.update({
+    where: { id: message.id },
+    data: { deliveryStatus: 'bounced', errorMessage },
+  })
+
+  const lead = message.thread.lead
+  const assigneeId = lead?.ownerId || message.thread.assignedUserId
+  if (lead) {
+    const actorId = await resolveSystemActorId(lead.ownerId)
+    await createTimelineEntry({
+      leadId: lead.id,
+      leadName: lead.name,
+      userId: actorId,
+      outcome: 'Email Bounced',
+      notes: `${message.subject}\n${errorMessage}`.trim(),
+      threadId: message.threadId,
+      messageId: message.id,
+      occurredAt: input.eventAt,
+    })
+  }
+
+  await notifyRecipients({
+    assigneeId,
+    title: 'Email bounced',
+    body: lead
+      ? `${lead.code} — ${lead.name}: ${message.subject}`
+      : `Bounce for: ${message.subject}`,
+    type: 'email_bounced',
+    threadId: message.threadId,
+    leadId: lead?.id || null,
+    dedupe: `bounce:${message.id}`,
+  })
+
+  emitEmailInbound({
+    threadId: message.threadId,
+    messageId: message.id,
+    leadId: lead?.id || null,
+    fromEmail: message.toEmail,
+    preview: errorMessage,
+  })
+
+  return { matched: true as const, messageId: message.id, threadId: message.threadId, leadId: lead?.id || null }
 }
 
 function nextInboundStatus(assigneeId: string | null, hadOutgoing: boolean): EmailThreadStatus {
@@ -574,10 +762,70 @@ export async function receiveInboundEmail(input: InboundEmailInput) {
   }
 
   const providerMessageId = input.messageId?.trim() || null
+
+  async function threadHasOutbound(threadId: string) {
+    const count = await prisma.emailMessage.count({
+      where: { threadId, direction: 'outgoing' },
+    })
+    return count > 0
+  }
+
+  async function isCrmConversationReply() {
+    const emailedByUs = await prisma.emailMessage.findFirst({
+      where: { direction: 'outgoing', toEmail: { equals: fromEmail, mode: 'insensitive' } },
+      select: { id: true },
+    })
+    if (emailedByUs) return true
+
+    const refIds = [input.inReplyTo, ...(input.references || '').split(/\s+/)]
+      .map((value) => (value || '').trim())
+      .filter(Boolean)
+    if (!refIds.length) return false
+
+    const related = await prisma.emailMessage.findFirst({
+      where: { direction: 'outgoing', providerMessageId: { in: refIds } },
+      select: { id: true },
+    })
+    return Boolean(related)
+  }
+
+  if (input.conversationOnly && !(await isCrmConversationReply())) {
+    return { skipped: true as const, duplicate: false, threadId: null, messageId: null, leadId: null }
+  }
+
   if (providerMessageId) {
-    const duplicate = await prisma.emailMessage.findUnique({ where: { providerMessageId } })
+    const duplicate = await prisma.emailMessage.findUnique({
+      where: { providerMessageId },
+      include: { thread: { select: { id: true, leadId: true, participantEmail: true } } },
+    })
     if (duplicate) {
-      return { skipped: true as const, duplicate: true, threadId: duplicate.threadId, messageId: duplicate.id, leadId: null }
+      const isConversation = await threadHasOutbound(duplicate.threadId)
+      if (input.conversationOnly && !isConversation) {
+        return {
+          skipped: true as const,
+          duplicate: true,
+          threadId: duplicate.threadId,
+          messageId: duplicate.id,
+          leadId: duplicate.thread.leadId,
+        }
+      }
+
+      let leadId = duplicate.thread.leadId
+      if (!leadId && isConversation) {
+        const matched = await matchLead({ email: duplicate.thread.participantEmail }).catch(() => null)
+        if (matched) {
+          await linkThreadToLead(duplicate.threadId, matched, true).catch(() => undefined)
+          leadId = matched
+        }
+      }
+      // Do not emit socket on duplicates — IMAP re-scans would refetch the UI in a loop.
+      return {
+        skipped: true as const,
+        duplicate: true,
+        threadId: duplicate.threadId,
+        messageId: duplicate.id,
+        leadId,
+      }
     }
   }
 
@@ -587,7 +835,11 @@ export async function receiveInboundEmail(input: InboundEmailInput) {
   const eventAt = input.eventAt || new Date()
   const phone = input.phone ? normalizePhone(input.phone) : extractPhone(text)
   const { thread, created } = await getOrCreateThread(fromEmail, contactName, subject)
-  const hadOutgoing = thread.lastDirection === 'outgoing'
+  const hadOutgoing = (await threadHasOutbound(thread.id)) || thread.lastDirection === 'outgoing'
+
+  if (input.conversationOnly && !hadOutgoing) {
+    return { skipped: true as const, duplicate: false, threadId: thread.id, messageId: null, leadId: thread.leadId }
+  }
 
   const files = await storeInboundFiles(thread.id, input.attachments || [])
 
@@ -627,7 +879,8 @@ export async function receiveInboundEmail(input: InboundEmailInput) {
 
   let leadId = thread.leadId
   let viaHub = false
-  if (!leadId) {
+  // IMAP conversation sync: never auto-create leads from random mailbox mail.
+  if (!leadId && !input.conversationOnly) {
     const resolved = await resolveLeadForInbound({
       threadId: thread.id,
       fromEmail,
@@ -643,6 +896,12 @@ export async function receiveInboundEmail(input: InboundEmailInput) {
       await linkThreadToLead(thread.id, resolved.leadId, hadOutgoing)
       leadId = resolved.leadId
       viaHub = resolved.viaHub
+    }
+  } else if (!leadId && input.conversationOnly) {
+    const matched = await matchLead({ email: fromEmail, phone }).catch(() => null)
+    if (matched) {
+      await linkThreadToLead(thread.id, matched, hadOutgoing).catch(() => undefined)
+      leadId = matched
     }
   }
 
@@ -684,6 +943,17 @@ export async function receiveInboundEmail(input: InboundEmailInput) {
         messageId: message.id,
         occurredAt: eventAt,
       })
+      await recordCrmEmailCommunication({
+        leadId: lead.id,
+        direction: 'incoming',
+        subject,
+        message: text || null,
+        senderName: contactName,
+        senderEmail: fromEmail,
+        externalId: `crm-email:${message.id}`,
+        eventAt,
+        formName: 'Student reply',
+      })
     }
     if (files.stored.length) {
       await createTimelineEntry({
@@ -696,13 +966,37 @@ export async function receiveInboundEmail(input: InboundEmailInput) {
         messageId: message.id,
         occurredAt: eventAt,
       })
+      await copyAttachmentsToLeadDocuments({
+        leadId: lead.id,
+        leadName: lead.name,
+        messageId: message.id,
+        uploadedById: actorId,
+        files: files.stored.map((file) => ({
+          buffer: file.buffer,
+          mimeType: file.mimeType,
+          fileName: file.fileName,
+        })),
+      })
     }
   }
 
   if (!viaHub) {
     const who = lead ? `${lead.code} — ${lead.name}` : contactName
     const base = { threadId: thread.id, leadId: lead?.id, assigneeId, dedupe: message.id }
-    if (!lead && created) {
+
+    if (input.conversationOnly) {
+      // Only notify for replies in conversations we started from the CRM.
+      if (hadOutgoing) {
+        await notifyRecipients({
+          ...base,
+          title: files.stored.length ? 'Attachment received' : 'Student replied to email',
+          body: files.stored.length
+            ? `${who} sent ${files.stored.map((file) => file.fileName).join(', ')}`
+            : `${who}: ${preview}`,
+          type: files.stored.length ? 'email_attachment' : 'email_student_reply',
+        })
+      }
+    } else if (!lead && created) {
       await notifyRecipients({
         ...base,
         title: 'New Incoming Email',
@@ -740,6 +1034,14 @@ export async function receiveInboundEmail(input: InboundEmailInput) {
     }
   }
 
+  emitEmailInbound({
+    threadId: thread.id,
+    messageId: message.id,
+    leadId: leadId || null,
+    fromEmail,
+    preview,
+  })
+
   return {
     skipped: false as const,
     duplicate: false,
@@ -768,6 +1070,12 @@ export function getEmailSettings(auth: AuthContext) {
     autoCreateLead: config.email.autoCreateLead,
     fromAddress: mailboxAddress(),
     canManage: canManageEmail(auth),
+    inbound: {
+      imap: isImapInboundConfigured(),
+      imapHost: isImapInboundConfigured() ? config.email.imap.host : null,
+      pollSeconds: config.email.imap.pollSeconds,
+      webhook: Boolean(config.email.webhookSecret) || !config.isProduction,
+    },
   }
 }
 
@@ -811,9 +1119,19 @@ export async function listThreads(
     assignedFilter = { leadId: null }
   }
 
+  // Default inbox: only CRM conversations (we emailed) or linked leads — not random Gmail noise.
+  // "Manual review" (unidentified) still lists lead-less threads for webhook convert.
+  const conversationScope: Prisma.EmailThreadWhereInput =
+    query.assigned === 'unidentified'
+      ? {}
+      : {
+          OR: [{ messages: { some: { direction: 'outgoing' } } }, { leadId: { not: null } }],
+        }
+
   const where: Prisma.EmailThreadWhereInput = {
     AND: [
       access,
+      conversationScope,
       status && STATUSES.includes(status) ? { status } : {},
       assignedFilter,
       search
@@ -936,7 +1254,19 @@ export async function sendThreadMessage(
     }
   }
 
-  const inReplyTo = thread.lastInboundMessageId
+  const priorIds = await prisma.emailMessage.findMany({
+    where: { threadId: thread.id, providerMessageId: { not: null } },
+    orderBy: { sentAt: 'desc' },
+    take: 20,
+    select: { providerMessageId: true },
+  })
+  const referenceIds = priorIds
+    .map((row) => row.providerMessageId)
+    .filter((value): value is string => Boolean(value))
+    .reverse()
+  const inReplyTo = thread.lastInboundMessageId || referenceIds[referenceIds.length - 1] || null
+  const referencesHeader = [...new Set([...referenceIds, inReplyTo].filter(Boolean) as string[])].join(' ') || null
+
   let providerMessageId: string | null = null
   let failure: string | null = null
   try {
@@ -946,7 +1276,7 @@ export async function sendThreadMessage(
       text,
       html: textToHtml(text),
       inReplyTo,
-      references: inReplyTo,
+      references: referencesHeader,
       attachments: stored && input.file
         ? [{ filename: stored.fileName, content: input.file.buffer, contentType: stored.mimeType }]
         : [],
@@ -968,7 +1298,7 @@ export async function sendThreadMessage(
       toEmail: to,
       providerMessageId,
       inReplyTo,
-      referencesHeader: inReplyTo,
+      referencesHeader,
       deliveryStatus: failure ? 'failed' : 'sent',
       errorMessage: failure,
       sentById: auth.user.id,
@@ -997,7 +1327,7 @@ export async function sendThreadMessage(
         lastMessageAt: now,
         lastMessagePreview: text.slice(0, 180),
         lastDirection: 'outgoing',
-        status: 'REPLIED',
+        status: 'WAITING_REPLY',
         unreadCount: 0,
       },
     })
@@ -1022,6 +1352,22 @@ export async function sendThreadMessage(
           threadId: thread.id,
           messageId: message.id,
         })
+        if (input.file?.buffer) {
+          await copyAttachmentsToLeadDocuments({
+            leadId: thread.lead.id,
+            leadName: thread.lead.name,
+            messageId: message.id,
+            uploadedById: auth.user.id,
+            files: [
+              {
+                buffer: input.file.buffer,
+                mimeType: stored.mimeType,
+                fileName: stored.fileName,
+                category: docCategory,
+              },
+            ],
+          })
+        }
       }
       await createTimelineEntry({
         leadId: thread.lead.id,
@@ -1031,6 +1377,17 @@ export async function sendThreadMessage(
         notes: `Reply sent to ${to}`,
         threadId: thread.id,
         messageId: message.id,
+      })
+      await recordCrmEmailCommunication({
+        leadId: thread.lead.id,
+        direction: 'outgoing',
+        subject,
+        message: text,
+        senderName: auth.user.fullName,
+        senderEmail: mailboxAddress(),
+        externalId: `crm-email:${message.id}`,
+        eventAt: now,
+        formName: 'CRM outbound',
       })
     }
 
@@ -1046,6 +1403,28 @@ export async function sendThreadMessage(
   }
 
   if (failure) {
+    if (thread.lead) {
+      await createTimelineEntry({
+        leadId: thread.lead.id,
+        leadName: thread.lead.name,
+        userId: auth.user.id,
+        outcome: 'Email Failed',
+        notes: `${subject}\n${failure}`.trim(),
+        threadId: thread.id,
+        messageId: message.id,
+      })
+    }
+    await notifyRecipients({
+      assigneeId: thread.lead?.ownerId || thread.assignedUserId || auth.user.id,
+      title: 'Email failed to send',
+      body: thread.lead
+        ? `${thread.lead.code} — ${thread.lead.name}: ${subject}`
+        : `${subject} → ${to}`,
+      type: 'email_failed',
+      threadId: thread.id,
+      leadId: thread.leadId,
+      dedupe: `fail:${message.id}`,
+    })
     throw new HttpError(502, EMAIL_MESSAGES.sendFailed, 'EMAIL_SEND_FAILED')
   }
 
@@ -1059,9 +1438,11 @@ export async function assignThread(auth: AuthContext, id: string, body: Record<s
   const reason = asOptionalString(body.reason, 400)
   if (!userId) throw httpError.validation({ userId: 'Please select an employee.' })
 
+  let leadReassignedViaAssign = false
   if (thread.lead) {
     if (thread.lead.ownerId !== userId) {
-      await assignLead(auth, thread.lead.id, { ownerId: userId, reason: reason || 'Email conversation assigned' }, meta)
+      await assignLead(auth, thread.lead.id, { ownerId: userId, reason: reason || 'Lead reassigned from email' }, meta)
+      leadReassignedViaAssign = true
     }
   } else {
     const assignee = await prisma.user.findFirst({
@@ -1082,13 +1463,14 @@ export async function assignThread(auth: AuthContext, id: string, body: Record<s
   const updated = await loadThread(id)
   const assigneeName = effectiveAssignee(updated)?.name || 'employee'
 
-  if (updated.lead) {
+  // assignLead already writes the lead-reassigned activity; only log when that path did not run.
+  if (updated.lead && !leadReassignedViaAssign) {
     await createTimelineEntry({
       leadId: updated.lead.id,
       leadName: updated.lead.name,
       userId: auth.user.id,
-      outcome: 'Email Assigned',
-      notes: `Email assigned to ${assigneeName}${reason ? ` — ${reason}` : ''}`,
+      outcome: 'Lead Reassigned',
+      notes: `Lead reassigned to ${assigneeName}${reason ? ` — ${reason}` : ''}`,
       threadId: id,
     })
   }
@@ -1246,6 +1628,33 @@ export async function convertThread(
 export async function getLeadThreads(auth: AuthContext, leadId: string) {
   await assertCanViewLead(auth, leadId)
   assertCanViewEmail(auth)
+
+  const lead = await prisma.lead.findUnique({
+    where: { id: leadId },
+    select: { id: true, name: true, email: true, ownerId: true },
+  })
+  if (!lead) throw httpError.notFound('Lead not found.')
+
+  // Repair: link any mailbox thread for this student's address that lost its leadId.
+  const email = lead.email?.trim().toLowerCase() || ''
+  if (email && isValidEmail(email)) {
+    const orphan = await prisma.emailThread.findFirst({
+      where: { participantEmail: email, OR: [{ leadId: null }, { leadId: lead.id }] },
+      select: { id: true, leadId: true, contactName: true, status: true },
+    })
+    if (orphan && !orphan.leadId) {
+      await prisma.emailThread.update({
+        where: { id: orphan.id },
+        data: {
+          leadId: lead.id,
+          contactName: orphan.contactName || lead.name,
+          assignedUserId: lead.ownerId,
+          status: orphan.status === 'NEW' && lead.ownerId ? 'ASSIGNED' : orphan.status,
+        },
+      })
+    }
+  }
+
   const rows = await prisma.emailThread.findMany({
     where: { leadId },
     include: threadInclude,

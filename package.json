@@ -28,6 +28,8 @@
     "dotenv": "^17.2.2",
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
+    "imapflow": "^2.2.5",
+    "mailparser": "^3.9.35",
     "multer": "^2.4.0",
     "nodemailer": "^10.0.12",
     "socket.io": "^4.8.4"
@@ -36,6 +38,7 @@
     "@types/cookie-parser": "^1.4.9",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
+    "@types/mailparser": "^3.9.0",
     "@types/multer": "^2.2.0",
     "@types/node": "^24.5.2",
     "@types/nodemailer": "^8.0.2",

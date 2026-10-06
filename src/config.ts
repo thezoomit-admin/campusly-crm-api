@@ -75,11 +75,6 @@ export const config = {
     defaultTemplateLanguage: (process.env.WHATSAPP_DEFAULT_TEMPLATE_LANGUAGE || 'en_US').trim(),
   },
   /**
-   * Official company mailbox. SMTP is used for outbound mail.
-   * When SMTP_HOST is missing, outgoing mail runs in mock mode outside production.
-   * Inbound mail arrives at POST /api/webhooks/email (EMAIL_WEBHOOK_SECRET).
-   */
-  /**
    * Meta Lead Ads (Facebook + Instagram).
    * Page access token fetches leadgen details from the Graph API.
    * When it is missing, webhooks still accept a normalized lead payload and the CRM can receive test leads.
@@ -91,15 +86,54 @@ export const config = {
     verifyToken: (process.env.META_VERIFY_TOKEN || '').trim(),
     webhookSecret: (process.env.META_WEBHOOK_SECRET || '').trim(),
   },
-  email: {
-    fromAddress: (process.env.EMAIL_FROM_ADDRESS || '').trim(),
-    fromName: (process.env.EMAIL_FROM_NAME || 'Campusly').trim(),
-    smtpHost: (process.env.SMTP_HOST || '').trim(),
-    smtpPort: Number(process.env.SMTP_PORT) || 587,
-    smtpUser: (process.env.SMTP_USER || '').trim(),
-    smtpPass: (process.env.SMTP_PASS || '').trim(),
-    smtpSecure: (process.env.SMTP_SECURE || '').trim().toLowerCase() === 'true',
-    webhookSecret: (process.env.EMAIL_WEBHOOK_SECRET || '').trim(),
-    autoCreateLead: (process.env.EMAIL_AUTO_CREATE_LEAD || 'true').trim().toLowerCase() !== 'false',
-  },
+  /**
+   * Official company mailbox.
+   * - SMTP: outbound send
+   * - IMAP: inbound sync of student replies (same mailbox credentials by default)
+   * - Webhook: POST /api/webhooks/email for ESP inbound parse (SendGrid/Mailgun/etc.)
+   */
+  email: (() => {
+    const smtpHost = (process.env.SMTP_HOST || '').trim()
+    const smtpUser = (process.env.SMTP_USER || '').trim()
+    const smtpPass = (process.env.SMTP_PASS || '').trim()
+    const derivedImapHost =
+      (process.env.IMAP_HOST || '').trim() ||
+      (smtpHost === 'smtp.gmail.com'
+        ? 'imap.gmail.com'
+        : smtpHost === 'smtp.office365.com' || smtpHost === 'smtp-mail.outlook.com'
+          ? 'outlook.office365.com'
+          : '')
+    const imapUser = (process.env.IMAP_USER || smtpUser).trim()
+    const imapPass = (process.env.IMAP_PASS || smtpPass).trim()
+    const imapEnabledEnv = (process.env.EMAIL_IMAP_ENABLED || '').trim().toLowerCase()
+    const imapEnabled =
+      imapEnabledEnv === 'false' || imapEnabledEnv === '0'
+        ? false
+        : Boolean(derivedImapHost && imapUser && imapPass)
+
+    return {
+      fromAddress: (process.env.EMAIL_FROM_ADDRESS || '').trim(),
+      fromName: (process.env.EMAIL_FROM_NAME || 'Campusly').trim(),
+      smtpHost,
+      smtpPort: Number(process.env.SMTP_PORT) || 587,
+      smtpUser,
+      smtpPass,
+      smtpSecure: (process.env.SMTP_SECURE || '').trim().toLowerCase() === 'true',
+      webhookSecret: (process.env.EMAIL_WEBHOOK_SECRET || '').trim(),
+      autoCreateLead: (process.env.EMAIL_AUTO_CREATE_LEAD || 'true').trim().toLowerCase() !== 'false',
+      imap: {
+        enabled: imapEnabled,
+        host: derivedImapHost,
+        port: Number(process.env.IMAP_PORT) || 993,
+        secure: (process.env.IMAP_SECURE || 'true').trim().toLowerCase() !== 'false',
+        user: imapUser,
+        pass: imapPass,
+        mailbox: (process.env.IMAP_MAILBOX || 'INBOX').trim() || 'INBOX',
+        pollSeconds: Math.max(15, Number(process.env.EMAIL_IMAP_POLL_SECONDS) || 30),
+      },
+      /** Hours after outbound before a waiting-reply reminder fires. */
+      waitingReplyHours: Math.max(1, Number(process.env.EMAIL_WAITING_REPLY_HOURS) || 24),
+      waitingReplyPollMinutes: Math.max(5, Number(process.env.EMAIL_WAITING_REPLY_POLL_MINUTES) || 15),
+    }
+  })(),
 }

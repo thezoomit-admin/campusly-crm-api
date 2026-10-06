@@ -1,11 +1,23 @@
 import type { Server as HttpServer } from 'node:http'
 import { Server } from 'socket.io'
 import { config, SESSION_COOKIE } from '../config'
+import { hasPermission } from '../modules/auth/access'
 import { loadAuthFromToken, type AuthContext } from '../modules/auth/session.service'
 
 export const SOCKET_EVENTS = {
   notificationCreated: 'notification:created',
+  emailInbound: 'email:inbound',
 } as const
+
+const EMAIL_CHANNEL = 'channel:email'
+
+export type EmailInboundPayload = {
+  threadId: string
+  messageId: string
+  leadId: string | null
+  fromEmail: string
+  preview: string
+}
 
 type NotificationCreatedPayload = {
   notification: {
@@ -77,6 +89,9 @@ export function initSocket(httpServer: HttpServer) {
       return
     }
     void socket.join(userRoom(auth.user.id))
+    if (hasPermission(auth.permissions, 'communication:view')) {
+      void socket.join(EMAIL_CHANNEL)
+    }
   })
 
   return io
@@ -93,4 +108,10 @@ export function emitToUser(userId: string, event: string, payload: unknown) {
 
 export function emitNotificationCreated(userId: string, payload: NotificationCreatedPayload) {
   emitToUser(userId, SOCKET_EVENTS.notificationCreated, payload)
+}
+
+/** Live email thread refresh for users with communication:view. */
+export function emitEmailInbound(payload: EmailInboundPayload) {
+  if (!io) return
+  io.to(EMAIL_CHANNEL).emit(SOCKET_EVENTS.emailInbound, payload)
 }

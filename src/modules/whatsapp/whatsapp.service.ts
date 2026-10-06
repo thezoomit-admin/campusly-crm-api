@@ -222,6 +222,10 @@ async function loadConversation(id: string) {
 }
 
 function previewFor(type: WhatsAppMessageType, body: string | null, fileName?: string | null) {
+  if (type === 'TEMPLATE') {
+    const name = body?.replace(/^Template:\s*/i, '').trim()
+    return name ? `Template · ${name}`.slice(0, 160) : 'Template message'
+  }
   if (body?.trim()) return body.trim().slice(0, 160)
   const labels: Record<WhatsAppMessageType, string> = {
     TEXT: 'Message',
@@ -996,7 +1000,7 @@ export async function sendConversationTemplate(
     auth,
     conversation,
     type: 'TEMPLATE',
-    body: `Template: ${name}`,
+    body: name,
     payloads: [{ kind: 'template', name, language }],
     meta,
   })

@@ -9,6 +9,7 @@ export const BASIC_FIELDS = new Set([
   'phone',
   'phoneCountryCode',
   'whatsapp',
+  'whatsappCountryCode',
   'whatsappSameAsPhone',
   'email',
   'dateOfBirth',
@@ -97,9 +98,19 @@ export function titleCaseName(value: string) {
     .join(' ')
 }
 
-export function normalizePhone(value: string) {
+export function normalizePhone(value: string, countryDialCode?: string | null) {
   let digits = value.replace(/\D/g, '')
   if (digits.startsWith('00')) digits = digits.slice(2)
+
+  const dial = (countryDialCode || '').replace(/\D/g, '')
+  if (dial) {
+    if (digits.startsWith(dial)) return digits
+    // Local numbers often keep a leading 0 (e.g. 017…).
+    if (digits.startsWith('0')) digits = digits.slice(1)
+    return `${dial}${digits}`
+  }
+
+  // Legacy Bangladesh heuristics when no country dial code is provided.
   if (digits.length === 11 && digits.startsWith('01')) digits = `880${digits}`
   if (digits.length === 10 && digits.startsWith('1')) digits = `880${digits}`
   return digits

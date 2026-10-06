@@ -1,6 +1,12 @@
 import type { Prisma, ServiceOfferStatus } from '../../lib/prisma-client'
 import { httpError } from '../../lib/http-error'
 import { prisma } from '../../lib/prisma'
+import {
+  isProcessGatedBehavior,
+  isTerminalBehavior,
+  resolveLeadStatus,
+  type LeadStatusItem,
+} from '../leads/lead-status'
 
 export type AuditMeta = { ipAddress?: string; userAgent?: string }
 
@@ -196,6 +202,100 @@ export async function syncOfferPaymentStatus(
   if (target === offer.status) return offer.status
   await changeOfferStatus(tx, { offer, to: target, actorId, meta })
   return target
+}
+
+/**
+ * Advances the lead pipeline from offer/payment events.
+ * - OFFERED: when an offer is generated or sent (CRM status “a service/package offer has been made”).
+ * - CONVERTED: when the first payment is recorded or a zero-value offer is accepted
+ *   (acceptance alone does not convert — CRM-009; payment does).
+ * Never moves backwards, and never touches File Opening / terminal statuses.
+ */
+export async function advanceLeadPipelineStatus(
+  tx: Prisma.TransactionClient,
+  input: {
+    leadId: string
+    actorId: string
+    targetCode: 'OFFERED' | 'CONVERTED'
+    remarks: string
+    meta?: AuditMeta
+  },
+) {
+  const rows = await tx.masterDataItem.findMany({
+    where: { categoryKey: 'LEAD_STATUS' },
+    select: { name: true, code: true, behaviorKey: true, sortOrder: true, status: true },
+  })
+  const items: LeadStatusItem[] = rows.map((row) => ({
+    name: row.name,
+    code: row.code,
+    behaviorKey: row.behaviorKey,
+    sortOrder: row.sortOrder,
+    status: row.status,
+  }))
+  const lead = await tx.lead.findUniqueOrThrow({
+    where: { id: input.leadId },
+    select: { id: true, status: true, statusCode: true },
+  })
+  const current = resolveLeadStatus(lead, items)
+  if (!current) return { changed: false as const }
+
+  if (isTerminalBehavior(current.behaviorKey) || current.behaviorKey === 'file_opened') {
+    return { changed: false as const }
+  }
+  if (input.targetCode === 'OFFERED' && isProcessGatedBehavior(current.behaviorKey)) {
+    return { changed: false as const }
+  }
+  if (
+    input.targetCode === 'CONVERTED' &&
+    (current.behaviorKey === 'converted' ||
+      current.behaviorKey === 'file_opening_pending' ||
+      current.behaviorKey === 'file_opened')
+  ) {
+    return { changed: false as const }
+  }
+
+  const target = items.find((item) => item.code === input.targetCode && item.status === 'ACTIVE')
+  if (!target?.code) return { changed: false as const }
+  if (current.code === target.code) return { changed: false as const }
+  if (input.targetCode === 'OFFERED' && current.sortOrder >= target.sortOrder) {
+    return { changed: false as const }
+  }
+
+  await tx.lead.update({
+    where: { id: input.leadId },
+    data: { status: target.name, statusCode: target.code, updatedById: input.actorId },
+  })
+  await tx.leadStatusHistory.create({
+    data: {
+      leadId: input.leadId,
+      previousStatus: current.name,
+      previousStatusCode: current.code || null,
+      newStatus: target.name,
+      newStatusCode: target.code,
+      remarks: input.remarks,
+      isOverride: false,
+      createdById: input.actorId,
+    },
+  })
+  await tx.auditLog.create({
+    data: {
+      userId: input.actorId,
+      action: 'LEAD_STATUS_CHANGED',
+      entityType: 'Lead',
+      entityId: input.leadId,
+      ipAddress: input.meta?.ipAddress,
+      userAgent: input.meta?.userAgent,
+      metadata: {
+        fromStatus: current.name,
+        fromStatusCode: current.code,
+        toStatus: target.name,
+        toStatusCode: target.code,
+        remarks: input.remarks,
+        source: 'service_offer',
+      },
+    },
+  })
+  return { changed: true as const, from: current.name, to: target.name }
 }
 
 /** Expires Sent offers whose validity period has passed. Returns the number expired. */

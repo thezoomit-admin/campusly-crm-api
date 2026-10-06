@@ -17,6 +17,10 @@ const UNASSIGNED: CountryAssignmentResult = {
   teamName: null,
 }
 
+export async function previewCountryAssignment(countryCode: string | null): Promise<CountryAssignmentResult> {
+  return resolveCountryAssignment(countryCode)
+}
+
 export async function resolveCountryAssignment(countryCode: string | null): Promise<CountryAssignmentResult> {
   if (!countryCode) return UNASSIGNED
 

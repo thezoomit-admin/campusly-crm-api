@@ -1,307 +1,420 @@
-import { writeAuditLog } from '../../lib/audit'
-import { httpError } from '../../lib/http-error'
-import type { Prisma } from '../../lib/prisma-client'
-import { prisma } from '../../lib/prisma'
+import { writeAuditLog } from "../../lib/audit";
+import { httpError } from "../../lib/http-error";
+import type { Prisma } from "../../lib/prisma-client";
+import { prisma } from "../../lib/prisma";
 
-import type { AuthContext } from '../auth/session.service'
+import type { AuthContext } from "../auth/session.service";
 import {
   ACTIVITY_TYPE_LABELS,
   ACTIVITY_TYPES,
   type ActivityTypeValue,
-} from './activities.constants'
+} from "./activities.constants";
 
-export { ACTIVITY_TYPES }
-export type { ActivityTypeValue }
+export { ACTIVITY_TYPES };
+export type { ActivityTypeValue };
 export const FEED_CATEGORIES = [
-  'call',
-  'message',
-  'meeting',
-  'email',
-  'counselling',
-  'document',
-  'status',
-  'assignment',
-  'payment',
-  'file',
-  'system',
-] as const
-export type FeedCategory = (typeof FEED_CATEGORIES)[number]
+  "call",
+  "message",
+  "meeting",
+  "email",
+  "counselling",
+  "document",
+  "status",
+  "assignment",
+  "payment",
+  "file",
+  "system",
+] as const;
+export type FeedCategory = (typeof FEED_CATEGORIES)[number];
 
 type UserScope = {
-  userId?: string
-  user?: Prisma.UserWhereInput
-}
+  userId?: string;
+  user?: Prisma.UserWhereInput;
+};
 
 export type ActivityFeedItem = {
-  id: string
-  source: 'activity' | 'audit'
-  category: FeedCategory
-  action: string
-  actionKey: string
-  module: string
-  details: string
-  relatedName: string | null
-  relatedType: string | null
-  relatedId: string | null
-  outcome: string | null
-  durationMin: number | null
-  nextAction: string | null
-  status: string
-  ipAddress: string | null
-  userAgent: string | null
-  occurredAt: Date
-  user: { id: string; fullName: string; email: string; roleName: string | null; photoUrl: string | null } | null
-  metadata: Record<string, unknown> | null
-}
+  id: string;
+  source: "activity" | "audit";
+  category: FeedCategory;
+  action: string;
+  actionKey: string;
+  module: string;
+  details: string;
+  relatedName: string | null;
+  relatedType: string | null;
+  relatedId: string | null;
+  outcome: string | null;
+  durationMin: number | null;
+  nextAction: string | null;
+  status: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+  occurredAt: Date;
+  user: {
+    id: string;
+    fullName: string;
+    email: string;
+    roleName: string | null;
+    photoUrl: string | null;
+  } | null;
+  metadata: Record<string, unknown> | null;
+};
 
 function scopeWhere(auth: AuthContext): UserScope {
-  const scope = auth.dataScopes.lead ?? 'OWN'
-  if (scope === 'OWN') {
-    return { userId: auth.user.id }
+  const scope = auth.dataScopes.lead ?? "OWN";
+  if (scope === "OWN") {
+    return { userId: auth.user.id };
   }
-  if (scope === 'TEAM' && auth.user.teamId) {
-    return { user: { teamId: auth.user.teamId } }
+  if (scope === "TEAM" && auth.user.teamId) {
+    return { user: { teamId: auth.user.teamId } };
   }
-  if (scope === 'DEPARTMENT' && auth.user.departmentId) {
-    return { user: { departmentId: auth.user.departmentId } }
+  if (scope === "DEPARTMENT" && auth.user.departmentId) {
+    return { user: { departmentId: auth.user.departmentId } };
   }
-  return {}
+  return {};
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
   }
-  return null
+  return null;
 }
 
 function stringify(value: unknown) {
-  if (value === null || value === undefined || value === '') {
-    return ''
+  if (value === null || value === undefined || value === "") {
+    return "";
   }
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
   }
   try {
-    return JSON.stringify(value)
+    return JSON.stringify(value);
   } catch {
-    return String(value)
+    return String(value);
   }
 }
 
 function humanize(value: string | null | undefined) {
   if (!value) {
-    return 'System'
+    return "System";
   }
   return value
-    .replace(/[._-]+/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[._-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
     .toLowerCase()
-    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function typeToCategory(type: ActivityTypeValue): FeedCategory {
-  if (type === 'CALL') return 'call'
-  if (type === 'MESSAGE' || type === 'WHATSAPP' || type === 'SMS') return 'message'
-  if (type === 'MEETING') return 'meeting'
-  if (type === 'EMAIL') return 'email'
-  if (type === 'COUNSELLING') return 'counselling'
-  if (type === 'DOCUMENT_REQUEST') return 'document'
-  if (type === 'PAYMENT_DISCUSSION') return 'payment'
-  return 'system'
+  if (type === "CALL") return "call";
+  if (type === "MESSAGE" || type === "WHATSAPP" || type === "SMS")
+    return "message";
+  if (type === "MEETING") return "meeting";
+  if (type === "EMAIL") return "email";
+  if (type === "COUNSELLING") return "counselling";
+  if (type === "DOCUMENT_REQUEST") return "document";
+  if (type === "PAYMENT_DISCUSSION") return "payment";
+  return "system";
 }
 
 function actionLabel(type: ActivityTypeValue) {
-  return ACTIVITY_TYPE_LABELS[type] || humanize(type)
+  return ACTIVITY_TYPE_LABELS[type] || humanize(type);
 }
 
 function activityDetails(row: {
-  type: ActivityTypeValue
-  relatedName: string | null
-  durationMin: number | null
-  outcome: string | null
-  notes: string | null
-  nextAction?: string | null
+  type: ActivityTypeValue;
+  relatedName: string | null;
+  durationMin: number | null;
+  outcome: string | null;
+  notes: string | null;
+  nextAction?: string | null;
 }) {
-  const name = row.relatedName || 'contact'
-  const label = actionLabel(row.type)
-  if (row.type === 'CALL') {
-    const bits = [`Called ${name}`]
-    if (row.durationMin) bits.push(`${row.durationMin} min`)
-    if (row.outcome) bits.push(row.outcome)
-    return bits.join(' · ')
+  const name = row.relatedName || "contact";
+  const label = actionLabel(row.type);
+  if (row.type === "CALL") {
+    const bits = [`Called ${name}`];
+    if (row.durationMin) bits.push(`${row.durationMin} min`);
+    if (row.outcome) bits.push(row.outcome);
+    return bits.join(" · ");
   }
-  if (row.type === 'WHATSAPP' || row.type === 'MESSAGE') {
-    return row.notes ? `WhatsApp with ${name}: ${row.notes}` : `WhatsApp with ${name}`
+  if (row.type === "WHATSAPP" || row.type === "MESSAGE") {
+    return row.notes
+      ? `WhatsApp with ${name}: ${row.notes}`
+      : `WhatsApp with ${name}`;
   }
-  if (row.type === 'SMS') {
-    return row.notes ? `SMS to ${name}: ${row.notes}` : `SMS to ${name}`
+  if (row.type === "SMS") {
+    return row.notes ? `SMS to ${name}: ${row.notes}` : `SMS to ${name}`;
   }
-  if (row.type === 'MEETING') {
-    return row.notes ? `Meeting with ${name}: ${row.notes}` : `Meeting with ${name}`
+  if (row.type === "MEETING") {
+    return row.notes
+      ? `Meeting with ${name}: ${row.notes}`
+      : `Meeting with ${name}`;
   }
-  if (row.type === 'EMAIL') {
-    return row.notes ? `Email to ${name}: ${row.notes}` : `Email sent to ${name}`
+  if (row.type === "EMAIL") {
+    const outcome = (row.outcome || "").toLowerCase();
+    if (
+      outcome.includes("received") ||
+      outcome.includes("bounced") ||
+      outcome.includes("failed")
+    ) {
+      const verb = outcome.includes("bounced")
+        ? "Email bounced"
+        : outcome.includes("failed")
+          ? "Email failed"
+          : "Email received";
+      return row.notes
+        ? `${verb} — ${name}: ${row.notes}`
+        : `${verb} — ${name}`;
+    }
+    if (outcome.includes("assigned") || outcome.includes("reassigned")) {
+      return row.notes || `Lead reassigned — ${name}`;
+    }
+    if (outcome.includes("attachment")) {
+      return row.notes
+        ? `${row.outcome} — ${name}: ${row.notes}`
+        : `${row.outcome || "Attachment"} — ${name}`;
+    }
+    return row.notes
+      ? `Email to ${name}: ${row.notes}`
+      : `Email sent to ${name}`;
   }
-  if (row.type === 'COUNSELLING') {
-    const bits = [`Counselling with ${name}`]
-    if (row.outcome) bits.push(row.outcome)
-    if (row.notes) bits.push(row.notes)
-    return bits.join(' · ')
+  if (row.type === "COUNSELLING") {
+    const bits = [`Counselling with ${name}`];
+    if (row.outcome) bits.push(row.outcome);
+    if (row.notes) bits.push(row.notes);
+    return bits.join(" · ");
   }
-  if (row.type === 'DOCUMENT_REQUEST') {
-    return row.notes ? `Document request for ${name}: ${row.notes}` : `Document request for ${name}`
+  if (row.type === "DOCUMENT_REQUEST") {
+    return row.notes
+      ? `Document request for ${name}: ${row.notes}`
+      : `Document request for ${name}`;
   }
-  if (row.type === 'PAYMENT_DISCUSSION') {
-    return row.notes ? `Payment discussion with ${name}: ${row.notes}` : `Payment discussion with ${name}`
+  if (row.type === "PAYMENT_DISCUSSION") {
+    return row.notes
+      ? `Payment discussion with ${name}: ${row.notes}`
+      : `Payment discussion with ${name}`;
   }
-  if (row.type === 'SERVICE_DISCUSSION') {
-    return row.notes ? `Service discussion with ${name}: ${row.notes}` : `Service discussion with ${name}`
+  if (row.type === "SERVICE_DISCUSSION") {
+    return row.notes
+      ? `Service discussion with ${name}: ${row.notes}`
+      : `Service discussion with ${name}`;
   }
-  if (row.type === 'FOLLOW_UP') {
-    return row.notes ? `Follow-up with ${name}: ${row.notes}` : `Follow-up with ${name}`
+  if (row.type === "FOLLOW_UP") {
+    return row.notes
+      ? `Follow-up with ${name}: ${row.notes}`
+      : `Follow-up with ${name}`;
   }
   if (row.nextAction) {
-    return row.notes ? `${label} · ${name}: ${row.notes}` : `${label} · ${name} · Next: ${row.nextAction}`
+    return row.notes
+      ? `${label} · ${name}: ${row.notes}`
+      : `${label} · ${name} · Next: ${row.nextAction}`;
   }
-  return row.notes || `${label} on ${name}`
+  return row.notes || `${label} on ${name}`;
 }
 
 function isOfferAction(action: string) {
-  return action.startsWith('SERVICE_OFFER_')
+  return action.startsWith("SERVICE_OFFER_");
 }
 
-function offerAuditDetails(action: string, metadata: Record<string, unknown> | null) {
-  const version = metadata?.offerVersion ? `Offer V${stringify(metadata.offerVersion)}` : 'Service offer'
-  const from = stringify(metadata?.from)
-  const to = stringify(metadata?.to)
-  const reason = stringify(metadata?.reason)
-  const amount = stringify(metadata?.finalPayable)
-  const suffix = reason ? ` — ${reason}` : ''
-  if (action === 'SERVICE_OFFER_STATUS_CHANGED' && from && to) return `${version}: ${from} → ${to}${suffix}`
-  if (action === 'SERVICE_OFFER_CREATED') return `${version} created as Draft · BDT ${amount}`
-  if (action === 'SERVICE_OFFER_REVISED') {
-    const previous = metadata?.revisedFromVersion ? ` from Offer V${stringify(metadata.revisedFromVersion)}` : ''
-    return `${version} created as a revision${previous} · BDT ${amount}${suffix}`
+function offerAuditDetails(
+  action: string,
+  metadata: Record<string, unknown> | null,
+) {
+  const version = metadata?.offerVersion
+    ? `Offer V${stringify(metadata.offerVersion)}`
+    : "Service offer";
+  const from = stringify(metadata?.from);
+  const to = stringify(metadata?.to);
+  const reason = stringify(metadata?.reason);
+  const amount = stringify(metadata?.finalPayable);
+  const suffix = reason ? ` — ${reason}` : "";
+  if (action === "SERVICE_OFFER_STATUS_CHANGED" && from && to)
+    return `${version}: ${from} → ${to}${suffix}`;
+  if (action === "SERVICE_OFFER_CREATED")
+    return `${version} created as Draft · BDT ${amount}`;
+  if (action === "SERVICE_OFFER_REVISED") {
+    const previous = metadata?.revisedFromVersion
+      ? ` from Offer V${stringify(metadata.revisedFromVersion)}`
+      : "";
+    return `${version} created as a revision${previous} · BDT ${amount}${suffix}`;
   }
-  if (action === 'SERVICE_OFFER_UPDATED') return `${version} updated · BDT ${stringify(metadata?.previousFinalPayable)} → BDT ${amount}`
-  if (action === 'SERVICE_OFFER_PAYMENT_RECORDED') {
-    return `${version}: payment ${stringify(metadata?.installmentSequence)} received · BDT ${stringify(metadata?.amount)}`
+  if (action === "SERVICE_OFFER_UPDATED")
+    return `${version} updated · BDT ${stringify(metadata?.previousFinalPayable)} → BDT ${amount}`;
+  if (action === "SERVICE_OFFER_PAYMENT_RECORDED") {
+    return `${version}: payment ${stringify(metadata?.installmentSequence)} received · BDT ${stringify(metadata?.amount)}`;
   }
-  if (action === 'SERVICE_OFFER_DELETED') return `${version} draft deleted`
-  return `${humanize(action)} · ${version}`
+  if (action === "SERVICE_OFFER_DELETED") return `${version} draft deleted`;
+  return `${humanize(action)} · ${version}`;
 }
 
-function classifyAudit(action: string, entityType: string | null): FeedCategory {
-  if (isOfferAction(action)) return action === 'SERVICE_OFFER_PAYMENT_RECORDED' ? 'payment' : 'counselling'
-  const text = `${action} ${entityType || ''}`.toLowerCase()
-  if (text.includes('document') || text.includes('verif')) return 'document'
-  if (text.includes('payment') || text.includes('receipt') || text.includes('discount')) return 'payment'
-  if (text.includes('assign') || text.includes('handover')) return 'assignment'
-  if (text.includes('status')) return 'status'
-  if (text.includes('close') || text.includes('reopen') || text.includes('file')) return 'file'
-  return 'system'
+function classifyAudit(
+  action: string,
+  entityType: string | null,
+): FeedCategory {
+  if (isOfferAction(action))
+    return action === "SERVICE_OFFER_PAYMENT_RECORDED"
+      ? "payment"
+      : "counselling";
+  const text = `${action} ${entityType || ""}`.toLowerCase();
+  if (text.includes("document") || text.includes("verif")) return "document";
+  if (
+    text.includes("payment") ||
+    text.includes("receipt") ||
+    text.includes("discount")
+  )
+    return "payment";
+  if (text.includes("assign") || text.includes("handover")) return "assignment";
+  if (text.includes("status")) return "status";
+  if (
+    text.includes("close") ||
+    text.includes("reopen") ||
+    text.includes("file")
+  )
+    return "file";
+  return "system";
 }
 
 function auditActionLabel(category: FeedCategory, action: string) {
-  if (isOfferAction(action)) return category === 'payment' ? 'Payment' : 'Service Offer'
-  if (category === 'document') return 'Document'
-  if (category === 'payment') return 'Payment'
-  if (category === 'assignment') return 'Assignment'
-  if (category === 'status') return 'Status'
-  if (category === 'file') return 'File'
-  if (action.toLowerCase().includes('permission')) return 'Permission'
-  if (action.toLowerCase().includes('role')) return 'User'
-  if (action.toLowerCase().includes('master')) return 'Master Data'
-  return humanize(action).split(' ')[0] || 'System'
+  if (isOfferAction(action))
+    return category === "payment" ? "Payment" : "Service Offer";
+  if (category === "document") return "Document";
+  if (category === "payment") return "Payment";
+  if (category === "assignment") return "Assignment";
+  if (category === "status") return "Status";
+  if (category === "file") return "File";
+  if (action.toLowerCase().includes("permission")) return "Permission";
+  if (action.toLowerCase().includes("role")) return "User";
+  if (action.toLowerCase().includes("master")) return "Master Data";
+  return humanize(action).split(" ")[0] || "System";
 }
 
 function auditModule(category: FeedCategory, entityType: string | null) {
-  if (category === 'document') return 'Documents'
-  if (category === 'payment') return 'Payments'
-  if (category === 'assignment') return 'Leads'
-  if (category === 'status') return 'Leads'
-  if (category === 'file') return 'Documents'
-  if (entityType === 'user' || entityType === 'role' || entityType === 'permission') return 'Users & Roles'
-  if (entityType === 'master_data' || entityType === 'MasterDataItem') return 'Master Data'
-  if (entityType) return humanize(entityType)
-  return 'System'
+  if (category === "document") return "Documents";
+  if (category === "payment") return "Payments";
+  if (category === "assignment") return "Leads";
+  if (category === "status") return "Leads";
+  if (category === "file") return "Documents";
+  if (
+    entityType === "user" ||
+    entityType === "role" ||
+    entityType === "permission"
+  )
+    return "Users & Roles";
+  if (entityType === "master_data" || entityType === "MasterDataItem")
+    return "Master Data";
+  if (entityType) return humanize(entityType);
+  return "System";
 }
 
-function auditDetails(action: string, entityType: string | null, entityId: string | null, metadata: Record<string, unknown> | null) {
-  const related = stringify(metadata?.relatedName || metadata?.name || metadata?.fullName)
+function auditDetails(
+  action: string,
+  entityType: string | null,
+  entityId: string | null,
+  metadata: Record<string, unknown> | null,
+) {
+  const related = stringify(
+    metadata?.relatedName || metadata?.name || metadata?.fullName,
+  );
   const code = entityId
-    ? `${(entityType || 'REC').replace(/[^a-z]/gi, '').slice(0, 3).toUpperCase() || 'REC'}-${entityId.replace(/-/g, '').slice(-4).toUpperCase()}`
-    : ''
-  const from = stringify(metadata?.from ?? metadata?.previous ?? metadata?.before)
-  const to = stringify(metadata?.to ?? metadata?.next ?? metadata?.after)
+    ? `${
+        (entityType || "REC")
+          .replace(/[^a-z]/gi, "")
+          .slice(0, 3)
+          .toUpperCase() || "REC"
+      }-${entityId.replace(/-/g, "").slice(-4).toUpperCase()}`
+    : "";
+  const from = stringify(
+    metadata?.from ?? metadata?.previous ?? metadata?.before,
+  );
+  const to = stringify(metadata?.to ?? metadata?.next ?? metadata?.after);
   if (from && to) {
-    return `${humanize(action)}${related ? ` · ${related}` : ''}: ${from} → ${to}`
+    return `${humanize(action)}${related ? ` · ${related}` : ""}: ${from} → ${to}`;
   }
   if (related) {
-    return `${humanize(action)} · ${related}`
+    return `${humanize(action)} · ${related}`;
   }
   if (code) {
-    return `${humanize(action)} ${code}`
+    return `${humanize(action)} ${code}`;
   }
-  return humanize(action)
+  return humanize(action);
 }
 
 function skipAuditAction(action: string) {
   return (
-    action.startsWith('ACTIVITY_') ||
-    action === 'LEAD_STATUS_CHANGED' ||
-    action === 'LEAD_CLOSED' ||
-    action === 'LEAD_REOPENED' ||
-    action === 'LEAD_HANDED_OVER'
-  )
+    action.startsWith("ACTIVITY_") ||
+    action === "LEAD_STATUS_CHANGED" ||
+    action === "LEAD_CLOSED" ||
+    action === "LEAD_REOPENED" ||
+    action === "LEAD_HANDED_OVER" ||
+    action === "LEAD_QUALIFIED"
+  );
 }
 
 function inRange(date: Date, from?: Date, to?: Date) {
-  if (from && date < from) return false
-  if (to && date > to) return false
-  return true
+  if (from && date < from) return false;
+  if (to && date > to) return false;
+  return true;
 }
 
 function percentChange(current: number, previous: number) {
   if (previous === 0) {
-    return current === 0 ? 0 : 100
+    return current === 0 ? 0 : 100;
   }
-  return Math.round(((current - previous) / previous) * 100)
+  return Math.round(((current - previous) / previous) * 100);
 }
 
-function dailySeries(items: ActivityFeedItem[], from: Date, to: Date, category?: FeedCategory) {
-  const days = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86400000) + 1)
-  const buckets = Array.from({ length: Math.min(days, 14) }, () => 0)
-  const span = Math.max(1, buckets.length - 1)
+function dailySeries(
+  items: ActivityFeedItem[],
+  from: Date,
+  to: Date,
+  category?: FeedCategory,
+) {
+  const days = Math.max(
+    1,
+    Math.round((to.getTime() - from.getTime()) / 86400000) + 1,
+  );
+  const buckets = Array.from({ length: Math.min(days, 14) }, () => 0);
+  const span = Math.max(1, buckets.length - 1);
   for (const item of items) {
-    if (category && item.category !== category) continue
-    const ratio = (item.occurredAt.getTime() - from.getTime()) / Math.max(1, to.getTime() - from.getTime())
-    const index = Math.min(buckets.length - 1, Math.max(0, Math.round(ratio * span)))
-    buckets[index] += 1
+    if (category && item.category !== category) continue;
+    const ratio =
+      (item.occurredAt.getTime() - from.getTime()) /
+      Math.max(1, to.getTime() - from.getTime());
+    const index = Math.min(
+      buckets.length - 1,
+      Math.max(0, Math.round(ratio * span)),
+    );
+    buckets[index] += 1;
   }
-  return buckets
+  return buckets;
 }
 
 function countCategory(items: ActivityFeedItem[], category: FeedCategory) {
-  return items.filter((item) => item.category === category).length
+  return items.filter((item) => item.category === category).length;
 }
 
 function parseOptionalBool(value: unknown) {
-  return value === true || value === 'true' || value === 'Yes' || value === 'yes'
+  return (
+    value === true || value === "true" || value === "Yes" || value === "yes"
+  );
 }
 
 function followUpTypeFromActivity(type: ActivityTypeValue) {
-  if (type === 'CALL') return 'Call'
-  if (type === 'WHATSAPP' || type === 'MESSAGE') return 'WhatsApp'
-  if (type === 'EMAIL') return 'Email'
-  if (type === 'SMS') return 'SMS'
-  if (type === 'COUNSELLING') return 'Counselling'
-  if (type === 'MEETING') return 'Meeting'
-  if (type === 'DOCUMENT_REQUEST') return 'Document Request'
-  if (type === 'PAYMENT_DISCUSSION') return 'Payment Discussion'
-  if (type === 'SERVICE_DISCUSSION') return 'Service Discussion'
-  return 'Call'
+  if (type === "CALL") return "Call";
+  if (type === "WHATSAPP" || type === "MESSAGE") return "WhatsApp";
+  if (type === "EMAIL") return "Email";
+  if (type === "SMS") return "SMS";
+  if (type === "COUNSELLING") return "Counselling";
+  if (type === "MEETING") return "Meeting";
+  if (type === "DOCUMENT_REQUEST") return "Document Request";
+  if (type === "PAYMENT_DISCUSSION") return "Payment Discussion";
+  if (type === "SERVICE_DISCUSSION") return "Service Discussion";
+  return "Call";
 }
 
 const activityUserSelect = {
@@ -310,17 +423,19 @@ const activityUserSelect = {
   email: true,
   photoUrl: true,
   primaryRole: { select: { name: true } },
-} as const
+} as const;
 
-function toUserDto(user: {
-  id: string
-  fullName: string
-  email: string
-  photoUrl?: string | null
-  primaryRole?: { name: string } | null
-} | null): ActivityFeedItem['user'] {
+function toUserDto(
+  user: {
+    id: string;
+    fullName: string;
+    email: string;
+    photoUrl?: string | null;
+    primaryRole?: { name: string } | null;
+  } | null,
+): ActivityFeedItem["user"] {
   if (!user) {
-    return null
+    return null;
   }
   return {
     id: user.id,
@@ -328,36 +443,43 @@ function toUserDto(user: {
     email: user.email,
     roleName: user.primaryRole?.name ?? null,
     photoUrl: user.photoUrl ?? null,
-  }
+  };
 }
 
 export async function listActivityFeed(
   auth: AuthContext,
   query: {
-    from?: string
-    to?: string
-    search?: string
-    category?: string
-    userId?: string
-    relatedId?: string
+    from?: string;
+    to?: string;
+    search?: string;
+    category?: string;
+    userId?: string;
+    relatedId?: string;
   },
 ) {
-  const now = new Date()
-  const to = query.to ? new Date(`${query.to}T23:59:59.999`) : now
-  const defaultWindowMs = query.relatedId ? 365 * 86400000 : 6 * 86400000
-  const from = query.from ? new Date(`${query.from}T00:00:00.000`) : new Date(to.getTime() - defaultWindowMs)
+  const now = new Date();
+  const to = query.to ? new Date(`${query.to}T23:59:59.999`) : now;
+  const defaultWindowMs = query.relatedId ? 365 * 86400000 : 6 * 86400000;
+  const from = query.from
+    ? new Date(`${query.from}T00:00:00.000`)
+    : new Date(to.getTime() - defaultWindowMs);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
-    throw httpError.badRequest('Please select a valid date range.', 'INVALID_DATE_RANGE')
+    throw httpError.badRequest(
+      "Please select a valid date range.",
+      "INVALID_DATE_RANGE",
+    );
   }
 
-  const duration = to.getTime() - from.getTime()
-  const prevTo = new Date(from.getTime() - 1)
-  const prevFrom = new Date(prevTo.getTime() - duration)
-  const scope = scopeWhere(auth)
-  const userFilter = query.userId ? { userId: query.userId } : scope
+  const duration = to.getTime() - from.getTime();
+  const prevTo = new Date(from.getTime() - 1);
+  const prevFrom = new Date(prevTo.getTime() - duration);
+  const scope = scopeWhere(auth);
+  const userFilter = query.userId ? { userId: query.userId } : scope;
 
-  const relatedFilter = query.relatedId ? { relatedId: query.relatedId } : {}
-  const auditRelatedFilter = query.relatedId ? { entityId: query.relatedId } : {}
+  const relatedFilter = query.relatedId ? { relatedId: query.relatedId } : {};
+  const auditRelatedFilter = query.relatedId
+    ? { entityId: query.relatedId }
+    : {};
 
   const [activities, audits] = await Promise.all([
     prisma.activity.findMany({
@@ -369,7 +491,7 @@ export async function listActivityFeed(
       include: {
         user: { select: activityUserSelect },
       },
-      orderBy: { occurredAt: 'desc' },
+      orderBy: { occurredAt: "desc" },
       take: 2000,
     }),
     prisma.auditLog.findMany({
@@ -381,18 +503,18 @@ export async function listActivityFeed(
       include: {
         user: { select: activityUserSelect },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: "desc" },
       take: 2000,
     }),
-  ])
+  ]);
 
   const mappedActivities: ActivityFeedItem[] = activities.map((row) => ({
     id: `activity:${row.id}`,
-    source: 'activity' as const,
+    source: "activity" as const,
     category: typeToCategory(row.type),
     action: actionLabel(row.type),
     actionKey: row.type,
-    module: 'Communication',
+    module: "Communication",
     details: activityDetails(row),
     relatedName: row.relatedName,
     relatedType: row.relatedType,
@@ -400,67 +522,91 @@ export async function listActivityFeed(
     outcome: row.outcome,
     durationMin: row.durationMin,
     nextAction: row.nextAction,
-    status: 'Completed',
+    status: "Completed",
     ipAddress: row.ipAddress,
     userAgent: row.userAgent,
     occurredAt: row.occurredAt,
     user: toUserDto(row.user),
     metadata: asRecord(row.metadata),
-  }))
+  }));
 
   const mappedAudits: ActivityFeedItem[] = audits
     .filter((row) => !skipAuditAction(row.action))
     .map((row) => {
-      const category = classifyAudit(row.action, row.entityType)
-      const metadata = asRecord(row.metadata)
+      const category = classifyAudit(row.action, row.entityType);
+      const metadata = asRecord(row.metadata);
       return {
         id: `audit:${row.id}`,
-        source: 'audit' as const,
+        source: "audit" as const,
         category,
         action: auditActionLabel(category, row.action),
         actionKey: row.action,
-        module: isOfferAction(row.action) ? 'Service Offers' : auditModule(category, row.entityType),
+        module: isOfferAction(row.action)
+          ? "Service Offers"
+          : auditModule(category, row.entityType),
         details: isOfferAction(row.action)
           ? offerAuditDetails(row.action, metadata)
           : auditDetails(row.action, row.entityType, row.entityId, metadata),
-        relatedName: stringify(metadata?.relatedName || metadata?.name || metadata?.fullName) || null,
+        relatedName:
+          stringify(
+            metadata?.relatedName || metadata?.name || metadata?.fullName,
+          ) || null,
         relatedType: row.entityType,
         relatedId: row.entityId,
         outcome: null,
         durationMin: null,
         nextAction: null,
-        status: 'Completed',
+        status: "Completed",
         ipAddress: row.ipAddress,
         userAgent: row.userAgent,
         occurredAt: row.createdAt,
         user: toUserDto(row.user),
         metadata,
-      }
-    })
+      };
+    });
 
-  const merged = [...mappedActivities, ...mappedAudits].sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
-  const current = merged.filter((item) => inRange(item.occurredAt, from, to))
-  const previous = merged.filter((item) => inRange(item.occurredAt, prevFrom, prevTo))
+  const merged = [...mappedActivities, ...mappedAudits].sort(
+    (a, b) => b.occurredAt.getTime() - a.occurredAt.getTime(),
+  );
+  const current = merged.filter((item) => inRange(item.occurredAt, from, to));
+  const previous = merged.filter((item) =>
+    inRange(item.occurredAt, prevFrom, prevTo),
+  );
 
-  const search = query.search?.trim().toLowerCase() || ''
+  const search = query.search?.trim().toLowerCase() || "";
   const searched = search
     ? current.filter((item) =>
-        [item.action, item.module, item.details, item.relatedName, item.ipAddress, item.user?.fullName, item.user?.email]
+        [
+          item.action,
+          item.module,
+          item.details,
+          item.relatedName,
+          item.ipAddress,
+          item.user?.fullName,
+          item.user?.email,
+        ]
           .filter(Boolean)
-          .join(' ')
+          .join(" ")
           .toLowerCase()
           .includes(search),
       )
-    : current
+    : current;
 
-  const category = FEED_CATEGORIES.includes(query.category as FeedCategory) ? (query.category as FeedCategory) : null
-  const items = category ? searched.filter((item) => item.category === category) : searched
+  const category = FEED_CATEGORIES.includes(query.category as FeedCategory)
+    ? (query.category as FeedCategory)
+    : null;
+  const items = category
+    ? searched.filter((item) => item.category === category)
+    : searched;
 
   const summaryFor = (key: FeedCategory) => ({
     value: countCategory(searched, key),
-    change: percentChange(countCategory(searched, key), countCategory(previous, key)),
+    change: percentChange(
+      countCategory(searched, key),
+      countCategory(previous, key),
+    ),
     series: dailySeries(searched, from, to, key),
-  })
+  });
 
   return {
     from: from.toISOString(),
@@ -468,78 +614,100 @@ export async function listActivityFeed(
     items,
     counts: {
       all: searched.length,
-      call: countCategory(searched, 'call'),
-      message: countCategory(searched, 'message'),
-      meeting: countCategory(searched, 'meeting'),
-      email: countCategory(searched, 'email'),
-      counselling: countCategory(searched, 'counselling'),
-      document: countCategory(searched, 'document'),
-      status: countCategory(searched, 'status'),
-      assignment: countCategory(searched, 'assignment'),
-      payment: countCategory(searched, 'payment'),
-      file: countCategory(searched, 'file'),
-      system: countCategory(searched, 'system'),
+      call: countCategory(searched, "call"),
+      message: countCategory(searched, "message"),
+      meeting: countCategory(searched, "meeting"),
+      email: countCategory(searched, "email"),
+      counselling: countCategory(searched, "counselling"),
+      document: countCategory(searched, "document"),
+      status: countCategory(searched, "status"),
+      assignment: countCategory(searched, "assignment"),
+      payment: countCategory(searched, "payment"),
+      file: countCategory(searched, "file"),
+      system: countCategory(searched, "system"),
     },
     summary: {
-      call: summaryFor('call'),
-      message: summaryFor('message'),
-      meeting: summaryFor('meeting'),
-      email: summaryFor('email'),
-      counselling: summaryFor('counselling'),
-      document: summaryFor('document'),
+      call: summaryFor("call"),
+      message: summaryFor("message"),
+      meeting: summaryFor("meeting"),
+      email: summaryFor("email"),
+      counselling: summaryFor("counselling"),
+      document: summaryFor("document"),
     },
-  }
+  };
 }
 
 export async function createActivity(
   auth: AuthContext,
   input: {
-    type: string
-    relatedName?: string
-    relatedType?: string
-    relatedId?: string
-    durationMin?: number | null
-    outcome?: string
-    notes?: string
-    nextAction?: string
-    nextDate?: string | null
-    occurredAt?: string
-    createNextFollowUp?: boolean | string
-    nextFollowUpType?: string
-    nextFollowUpPriority?: string
+    type: string;
+    relatedName?: string;
+    relatedType?: string;
+    relatedId?: string;
+    durationMin?: number | null;
+    outcome?: string;
+    notes?: string;
+    nextAction?: string;
+    nextDate?: string | null;
+    occurredAt?: string;
+    createNextFollowUp?: boolean | string;
+    nextFollowUpType?: string;
+    nextFollowUpPriority?: string;
   },
   meta: { ipAddress?: string; userAgent?: string },
 ) {
   if (!ACTIVITY_TYPES.includes(input.type as ActivityTypeValue)) {
-    throw httpError.validation({ type: 'Select a valid activity type.' })
+    throw httpError.validation({ type: "Select a valid activity type." });
   }
-  const type = input.type as ActivityTypeValue
-  const durationMin = input.durationMin === undefined || input.durationMin === null ? null : Number(input.durationMin)
-  if (durationMin !== null && (Number.isNaN(durationMin) || durationMin < 0 || durationMin > 24 * 60)) {
-    throw httpError.validation({ durationMin: 'Enter a valid duration in minutes.' })
+  const type = input.type as ActivityTypeValue;
+  const durationMin =
+    input.durationMin === undefined || input.durationMin === null
+      ? null
+      : Number(input.durationMin);
+  if (
+    durationMin !== null &&
+    (Number.isNaN(durationMin) || durationMin < 0 || durationMin > 24 * 60)
+  ) {
+    throw httpError.validation({
+      durationMin: "Enter a valid duration in minutes.",
+    });
   }
 
-  const outcome = input.outcome?.trim() || null
-  if (type === 'CALL' && outcome === 'Other' && !input.notes?.trim()) {
-    throw httpError.validation({ notes: 'Please provide a reason.' }, 'Please provide a reason.')
+  const outcome = input.outcome?.trim() || null;
+  if (type === "CALL" && outcome === "Other" && !input.notes?.trim()) {
+    throw httpError.validation(
+      { notes: "Please provide a reason." },
+      "Please provide a reason.",
+    );
   }
 
-  const nextAction = input.nextAction?.trim() || null
-  const nextDate = input.nextDate ? new Date(input.nextDate) : null
+  const nextAction = input.nextAction?.trim() || null;
+  const nextDate = input.nextDate ? new Date(input.nextDate) : null;
   if (input.nextDate && (!nextDate || Number.isNaN(nextDate.getTime()))) {
-    throw httpError.validation({ nextDate: 'Please select a valid date.' }, 'Please select a valid date.')
+    throw httpError.validation(
+      { nextDate: "Please select a valid date." },
+      "Please select a valid date.",
+    );
   }
 
-  const createNext = parseOptionalBool(input.createNextFollowUp)
+  const createNext = parseOptionalBool(input.createNextFollowUp);
   if (createNext) {
     if (!nextDate) {
-      throw httpError.validation({ nextDate: 'Follow-up date is required.' }, 'Follow-up date is required.')
+      throw httpError.validation(
+        { nextDate: "Follow-up date is required." },
+        "Follow-up date is required.",
+      );
     }
     if (!nextAction) {
-      throw httpError.validation({ nextAction: 'Please enter the next action.' }, 'Please enter the next action.')
+      throw httpError.validation(
+        { nextAction: "Please enter the next action." },
+        "Please enter the next action.",
+      );
     }
-    if (input.relatedType !== 'lead' || !input.relatedId?.trim()) {
-      throw httpError.validation({ relatedId: 'Lead is required to schedule the next follow-up.' })
+    if (input.relatedType !== "lead" || !input.relatedId?.trim()) {
+      throw httpError.validation({
+        relatedId: "Lead is required to schedule the next follow-up.",
+      });
     }
   }
 
@@ -562,89 +730,112 @@ export async function createActivity(
     include: {
       user: { select: activityUserSelect },
     },
-  })
+  });
 
-  let nextFollowUp: { id: string } | null = null
+  let nextFollowUp: { id: string } | null = null;
   if (createNext && nextDate && input.relatedId) {
-    const lead = await prisma.lead.findUnique({ where: { id: input.relatedId } })
+    const lead = await prisma.lead.findUnique({
+      where: { id: input.relatedId },
+    });
     if (lead) {
-      const { computeReminderAt } = await import('../follow-ups/follow-ups.utils')
-      const reminder = '30 Minutes Before'
-      const reminderAt = computeReminderAt(nextDate, reminder)
+      const { computeReminderAt } =
+        await import("../follow-ups/follow-ups.utils");
+      const reminder = "30 Minutes Before";
+      const reminderAt = computeReminderAt(nextDate, reminder);
       const followUp = await prisma.followUp.create({
         data: {
           leadId: lead.id,
           contactName: lead.name,
-          type: input.nextFollowUpType?.trim() || followUpTypeFromActivity(type),
+          type:
+            input.nextFollowUpType?.trim() || followUpTypeFromActivity(type),
           dueAt: nextDate,
-          priority: input.nextFollowUpPriority?.trim() || lead.priority || 'Medium',
-          status: nextDate.getTime() < Date.now() ? 'Overdue' : 'Pending',
-          purpose: type === 'COUNSELLING' ? 'Counselling' : 'Information Sharing',
+          priority:
+            input.nextFollowUpPriority?.trim() || lead.priority || "Medium",
+          status: nextDate.getTime() < Date.now() ? "Overdue" : "Pending",
+          purpose:
+            type === "COUNSELLING" ? "Counselling" : "Information Sharing",
           notes: input.notes?.trim() || null,
           nextAction,
           reminder,
           reminderAt,
-          reminderStatus: reminderAt ? 'Pending' : 'Skipped',
+          reminderStatus: reminderAt ? "Pending" : "Skipped",
           ownerId: lead.ownerId || auth.user.id,
           ownerName: lead.ownerName || auth.user.fullName,
-          source: 'Manual',
+          source: "Manual",
           sourceReason: `Created from ${ACTIVITY_TYPE_LABELS[type]} activity`,
         },
-      })
-      nextFollowUp = { id: followUp.id }
+      });
+      nextFollowUp = { id: followUp.id };
       await writeAuditLog({
         userId: auth.user.id,
-        action: 'FOLLOW_UP_CREATED',
-        entityType: 'lead',
+        action: "FOLLOW_UP_CREATED",
+        entityType: "lead",
         entityId: lead.id,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
-        metadata: { followUpId: followUp.id, fromActivityId: row.id, type: followUp.type },
-      })
+        metadata: {
+          followUpId: followUp.id,
+          fromActivityId: row.id,
+          type: followUp.type,
+        },
+      });
     }
   } else if (
-    type === 'COUNSELLING' &&
-    (outcome || '').toLowerCase() === 'completed' &&
-    input.relatedType === 'lead' &&
+    type === "COUNSELLING" &&
+    (outcome || "").toLowerCase() === "completed" &&
+    input.relatedType === "lead" &&
     input.relatedId
   ) {
     // Auto follow-up after counselling completed (CRM-005 Rule-18)
     try {
-      const lead = await prisma.lead.findUnique({ where: { id: input.relatedId } })
+      const lead = await prisma.lead.findUnique({
+        where: { id: input.relatedId },
+      });
       if (lead) {
-        const { createSystemFollowUp, daysFromNow } = await import('../follow-ups/system-follow-up')
+        const { createSystemFollowUp, daysFromNow } =
+          await import("../follow-ups/system-follow-up");
         const result = await createSystemFollowUp({
           leadId: lead.id,
           contactName: lead.name,
-          type: 'Call',
-          purpose: 'Service Discussion',
-          nextAction: nextAction || 'Discuss next steps after counselling',
-          dueAt: nextDate && !Number.isNaN(nextDate.getTime()) ? nextDate : daysFromNow(1),
-          priority: lead.priority || 'High',
+          type: "Call",
+          purpose: "Service Discussion",
+          nextAction: nextAction || "Discuss next steps after counselling",
+          dueAt:
+            nextDate && !Number.isNaN(nextDate.getTime())
+              ? nextDate
+              : daysFromNow(1),
+          priority: lead.priority || "High",
           ownerId: lead.ownerId || auth.user.id,
           ownerName: lead.ownerName || auth.user.fullName,
-          reason: 'Counselling Completed — Next Action Required',
+          reason: "Counselling Completed — Next Action Required",
           actorUserId: auth.user.id,
           meta,
-        })
-        if (result.created) nextFollowUp = { id: result.followUp.id }
+        });
+        if (result.created) nextFollowUp = { id: result.followUp.id };
       }
     } catch (error) {
-      console.error('[follow-ups] Auto follow-up after counselling failed:', error)
+      console.error(
+        "[follow-ups] Auto follow-up after counselling failed:",
+        error,
+      );
     }
   }
 
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'ACTIVITY_CREATED',
-    entityType: 'activity',
+    action: "ACTIVITY_CREATED",
+    entityType: "activity",
     entityId: row.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
-    metadata: { type: row.type, relatedName: row.relatedName, nextFollowUpId: nextFollowUp?.id },
-  })
+    metadata: {
+      type: row.type,
+      relatedName: row.relatedName,
+      nextFollowUpId: nextFollowUp?.id,
+    },
+  });
 
-  return { activity: row, nextFollowUp }
+  return { activity: row, nextFollowUp };
 }
 
 export async function recordActivityExport(
@@ -653,10 +844,10 @@ export async function recordActivityExport(
 ) {
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'ACTIVITY_EXPORTED',
-    entityType: 'activity',
+    action: "ACTIVITY_EXPORTED",
+    entityType: "activity",
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { count: meta.count },
-  })
+  });
 }
