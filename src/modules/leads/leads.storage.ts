@@ -5,10 +5,12 @@ import type { UploadApiErrorResponse, UploadApiResponse } from 'cloudinary'
 import cloudinary, { CLOUDINARY_FOLDER } from '../../config/cloudinary'
 import { httpError } from '../../lib/http-error'
 
-export const MAX_LEAD_UPLOAD_BYTES = 5 * 1024 * 1024
+const configuredMb = Number(process.env.LEAD_DOCUMENT_MAX_MB || process.env.DOCUMENT_MAX_MB || 10)
+export const MAX_LEAD_UPLOAD_BYTES = Math.max(1, Number.isFinite(configuredMb) ? configuredMb : 10) * 1024 * 1024
 export const LEAD_UPLOAD_ROOT = path.resolve(process.cwd(), 'uploads', 'leads')
 
-const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/jpg'])
+const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/jpg'])
+/** Spec CRM-025: PDF, JPG, JPEG, PNG. Word kept for email/status attachment compatibility. */
 const DOCUMENT_TYPES = new Set([
   ...IMAGE_TYPES,
   'application/pdf',
@@ -42,7 +44,6 @@ function extensionFor(mimeType: string, originalName: string) {
   if (mimeType === 'application/pdf') return '.pdf'
   if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return '.jpg'
   if (mimeType.includes('png')) return '.png'
-  if (mimeType.includes('webp')) return '.webp'
   if (mimeType.includes('wordprocessingml')) return '.docx'
   if (mimeType === 'application/msword') return '.doc'
   return ''
@@ -50,10 +51,10 @@ function extensionFor(mimeType: string, originalName: string) {
 
 function assertAllowed(file: Express.Multer.File) {
   if (file.size > MAX_LEAD_UPLOAD_BYTES) {
-    throw httpError.invalidUpload('Document must be 5 MB or smaller.')
+    throw httpError.invalidUpload('File size exceeds the allowed limit.')
   }
   if (!DOCUMENT_TYPES.has(file.mimetype)) {
-    throw httpError.invalidUpload('Document must be a PDF, Word, or image file.')
+    throw httpError.invalidUpload('This file type is not supported.')
   }
 }
 
@@ -165,9 +166,7 @@ async function saveCloudinaryDocument(leadId: string, file: Express.Multer.File,
     } satisfies StoredLeadUpload
   } catch (error) {
     console.error('Lead document Cloudinary upload failed:', error)
-    throw httpError.invalidUpload(
-      'Document storage is unavailable. Configure Cloudinary credentials or use local storage.',
-    )
+    throw httpError.invalidUpload('Unable to upload the document. Please try again.')
   }
 }
 

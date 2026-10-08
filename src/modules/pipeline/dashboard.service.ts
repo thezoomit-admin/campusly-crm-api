@@ -20,7 +20,7 @@ const CLOSED_APPLICATION_STATUSES = [
   "Withdrawn",
 ];
 const OPEN_FOLLOW_UP_STATUSES = ["Pending", "Due Soon", "Overdue"];
-const PAID_STATUSES = ["Paid", "Partial"];
+const PAID_STATUSES = ["COMPLETED"] as const;
 
 const COUNTRY_FLAGS: Record<string, string> = {
   canada: "🇨🇦",
@@ -240,17 +240,17 @@ export async function getDashboardOverview(year: number, month: number) {
       },
     }),
     prisma.payment.findMany({
-      where: { status: { in: PAID_STATUSES } },
+      where: { status: { in: [...PAID_STATUSES] } },
       select: { amount: true },
     }),
     prisma.payment.findMany({
-      where: { status: { in: PAID_STATUSES }, paidAt: { gte: last30 } },
+      where: { status: { in: [...PAID_STATUSES] }, paymentDate: { gte: last30 } },
       select: { amount: true },
     }),
     prisma.payment.findMany({
       where: {
-        status: { in: PAID_STATUSES },
-        paidAt: { gte: prev30, lt: last30 },
+        status: { in: [...PAID_STATUSES] },
+        paymentDate: { gte: prev30, lt: last30 },
       },
       select: { amount: true },
     }),
@@ -292,8 +292,8 @@ export async function getDashboardOverview(year: number, month: number) {
       select: { submittedAt: true },
     }),
     prisma.payment.findMany({
-      where: { paidAt: { gte: monthStart, lt: monthEnd } },
-      select: { paidAt: true },
+      where: { paymentDate: { gte: monthStart, lt: monthEnd } },
+      select: { paymentDate: true },
     }),
     prisma.activity.findMany({
       where: { type: "MEETING", occurredAt: { gte: monthStart, lt: monthEnd } },
@@ -302,15 +302,15 @@ export async function getDashboardOverview(year: number, month: number) {
   ]);
 
   const revenueTotal = paidPayments.reduce(
-    (sum, row) => sum + parseMoney(row.amount),
+    (sum, row) => sum + Number(row.amount),
     0,
   );
   const revenueLast30 = paymentsLast30.reduce(
-    (sum, row) => sum + parseMoney(row.amount),
+    (sum, row) => sum + Number(row.amount),
     0,
   );
   const revenuePrev30 = paymentsPrev30.reduce(
-    (sum, row) => sum + parseMoney(row.amount),
+    (sum, row) => sum + Number(row.amount),
     0,
   );
   const onTimeInRange = onTimeCandidates.filter(
@@ -362,7 +362,7 @@ export async function getDashboardOverview(year: number, month: number) {
   for (const row of monthFollowUps) mark(row.dueAt, "followup");
   for (const row of monthMeetings) mark(row.occurredAt, "meeting");
   for (const row of monthApplications) mark(row.submittedAt, "application");
-  for (const row of monthPayments) mark(row.paidAt, "payment");
+  for (const row of monthPayments) mark(row.paymentDate, "payment");
 
   return {
     stats: [
@@ -480,12 +480,12 @@ export async function getReportMetrics() {
     prisma.followUp.count({
       where: { createdAt: { gte: prev30, lt: last30 } },
     }),
-    prisma.payment.count({ where: { status: "Paid" } }),
+    prisma.payment.count({ where: { status: "COMPLETED" } }),
     prisma.payment.count({
-      where: { status: "Paid", paidAt: { gte: last30 } },
+      where: { status: "COMPLETED", paymentDate: { gte: last30 } },
     }),
     prisma.payment.count({
-      where: { status: "Paid", paidAt: { gte: prev30, lt: last30 } },
+      where: { status: "COMPLETED", paymentDate: { gte: prev30, lt: last30 } },
     }),
   ]);
 

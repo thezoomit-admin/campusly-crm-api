@@ -21,4 +21,10 @@ export type {
   WhatsAppConversationStatus,
   WhatsAppMessageType,
   EmailThreadStatus,
+  LeadDocument,
+  LeadDocumentStatus,
+  LeadDocumentActivityAction,
+  FileDocumentStatus,
+  PaymentTxnStatus,
+  ActivityType,
 } from '../../generated/prisma/index'

@@ -42,8 +42,9 @@ const TRANSITIONS: Record<ServiceOfferStatus, readonly ServiceOfferStatus[]> = {
   SENT: ['ACCEPTED', 'REJECTED', 'EXPIRED', 'CANCELLED'],
   ACCEPTED: ['PAYMENT_PENDING', 'CANCELLED'],
   PAYMENT_PENDING: ['PARTIALLY_PAID', 'PAID', 'CANCELLED'],
-  PARTIALLY_PAID: ['PAID'],
-  PAID: [],
+  /** Payment cancel/reverse may move Paid / Partially Paid back toward Payment Pending. */
+  PARTIALLY_PAID: ['PAID', 'PAYMENT_PENDING'],
+  PAID: ['PARTIALLY_PAID', 'PAYMENT_PENDING'],
   REJECTED: [],
   EXPIRED: [],
   CANCELLED: [],
@@ -182,7 +183,10 @@ export async function nextOfferVersion(tx: Prisma.TransactionClient, leadId: str
   return (latest._max.offerVersion ?? 0) + 1
 }
 
-/** Moves an accepted offer between Payment Pending, Partially Paid, and Paid from its installments. */
+/**
+ * Moves an accepted offer between Payment Pending, Partially Paid, and Paid.
+ * Prefers completed Payment rows; falls back to installment PAID sums for legacy data.
+ */
 export async function syncOfferPaymentStatus(
   tx: Prisma.TransactionClient,
   offerId: string,
@@ -191,13 +195,21 @@ export async function syncOfferPaymentStatus(
 ) {
   const offer = await tx.serviceOffer.findUniqueOrThrow({
     where: { id: offerId },
-    include: { installments: { select: { amount: true, status: true } } },
+    include: {
+      installments: { select: { amount: true, status: true } },
+      payments: { where: { status: 'COMPLETED' }, select: { amount: true } },
+    },
   })
-  if (!['PAYMENT_PENDING', 'PARTIALLY_PAID'].includes(offer.status)) return offer.status
+  if (!['PAYMENT_PENDING', 'PARTIALLY_PAID', 'PAID'].includes(offer.status)) return offer.status
   const total = Math.round(Number(offer.finalPayable) * 100)
-  const paid = offer.installments
+  const paidFromPayments = offer.payments.reduce(
+    (sum, item) => sum + Math.round(Number(item.amount) * 100),
+    0,
+  )
+  const paidFromInstallments = offer.installments
     .filter((item) => item.status === 'PAID')
     .reduce((sum, item) => sum + Math.round(Number(item.amount) * 100), 0)
+  const paid = offer.payments.length > 0 ? paidFromPayments : paidFromInstallments
   const target: ServiceOfferStatus = paid >= total ? 'PAID' : paid > 0 ? 'PARTIALLY_PAID' : 'PAYMENT_PENDING'
   if (target === offer.status) return offer.status
   await changeOfferStatus(tx, { offer, to: target, actorId, meta })

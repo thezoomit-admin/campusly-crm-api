@@ -101,19 +101,19 @@ model Department {
 }
 
 model Team {
-  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  key          String       @unique
-  name         String
-  description  String?
-  sortOrder    Int          @default(0) @map("sort_order")
-  departmentId String       @map("department_id") @db.Uuid
-  status       RecordStatus @default(ACTIVE)
-  createdAt    DateTime     @default(now()) @map("created_at")
-  updatedAt    DateTime     @default(now()) @updatedAt @map("updated_at")
-  department   Department   @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  users        User[]
-  employees    Employee[]
-  assignedLeads Lead[]                      @relation("LeadCountryTeam")
+  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key           String                  @unique
+  name          String
+  description   String?
+  sortOrder     Int                     @default(0) @map("sort_order")
+  departmentId  String                  @map("department_id") @db.Uuid
+  status        RecordStatus            @default(ACTIVE)
+  createdAt     DateTime                @default(now()) @map("created_at")
+  updatedAt     DateTime                @default(now()) @updatedAt @map("updated_at")
+  department    Department              @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  users         User[]
+  employees     Employee[]
+  assignedLeads Lead[]                  @relation("LeadCountryTeam")
   countryRules  CountryAssignmentRule[]
 
   @@index([departmentId])
@@ -121,74 +121,90 @@ model Team {
 }
 
 model User {
-  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  fullName            String        @default("User") @map("full_name")
-  email               String        @unique
-  username            String        @unique
-  mobile              String        @default("01700000000")
-  passwordHash        String        @map("password_hash")
-  photoUrl            String?       @map("photo_url")
-  status              UserStatus    @default(ACTIVE)
-  departmentId        String?       @map("department_id") @db.Uuid
-  teamId              String?       @map("team_id") @db.Uuid
-  primaryRoleId       String?       @map("primary_role_id") @db.Uuid
-  failedLoginAttempts Int           @default(0) @map("failed_login_attempts")
-  lockedUntil         DateTime?     @map("locked_until")
-  lastLoginAt         DateTime?     @map("last_login_at")
-  createdAt           DateTime      @default(now()) @map("created_at")
-  updatedAt           DateTime      @updatedAt @map("updated_at")
-  department          Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  team                Team?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  primaryRole         Role?         @relation("UserPrimaryRole", fields: [primaryRoleId], references: [id], onDelete: Restrict)
-  sessions            Session[]
-  passwordResetTokens PasswordResetToken[]
-  permissionOverrides UserPermissionOverride[]
-  dataScopes          UserDataScope[]
-  roleHistory         RoleHistory[]          @relation("RoleHistoryUser")
-  roleChangesMade     RoleHistory[]          @relation("RoleHistoryActor")
-  permissionHistory   PermissionHistory[]    @relation("PermissionHistoryUser")
-  permissionChangesMade PermissionHistory[]  @relation("PermissionHistoryActor")
-  auditLogs           AuditLog[]
-  activities          Activity[]
-  masterDataCreated   MasterDataItem[]       @relation("MasterDataCreatedBy")
-  masterDataUpdated   MasterDataItem[]       @relation("MasterDataUpdatedBy")
-  employee            Employee?
-  ownedLeads          Lead[]                 @relation("LeadOwner")
-  createdLeads        Lead[]                 @relation("LeadCreatedBy")
-  updatedLeads        Lead[]                 @relation("LeadUpdatedBy")
-  assignmentFrom      LeadAssignment[]       @relation("AssignmentFrom")
-  assignmentTo        LeadAssignment[]       @relation("AssignmentTo")
-  assignmentsMade     LeadAssignment[]       @relation("AssignmentActor")
-  qualificationHistory LeadQualificationHistory[]
-  statusHistory        LeadStatusHistory[]
-  defaultCountryRules CountryAssignmentRule[] @relation("CountryRuleDefaultOwner")
-  counselledApplications Application[]       @relation("ApplicationCounsellor")
-  counselledStudents  Student[]              @relation("StudentCounsellor")
-  uploadedDocuments   CrmDocument[]          @relation("DocumentUploader")
-  uploadedLeadDocuments LeadDocument[]       @relation("LeadDocumentUploader")
-  authoredLeadNotes   LeadNote[]             @relation("LeadNoteAuthor")
-  ownedFollowUps      FollowUp[]             @relation("FollowUpOwner")
-  notifications       Notification[]         @relation("NotificationRecipient")
-  campaignsCreated    Campaign[]             @relation("CampaignCreatedBy")
-  campaignsUpdated    Campaign[]             @relation("CampaignUpdatedBy")
-  attributionChanges  LeadAttributionChange[]
-  whatsappConversationsAssigned WhatsAppConversation[] @relation("WhatsAppConversationAssignee")
-  whatsappMessagesSent WhatsAppMessage[]     @relation("WhatsAppMessageSender")
-  emailThreadsAssigned EmailThread[]         @relation("EmailThreadAssignee")
-  emailMessagesSent    EmailMessage[]        @relation("EmailMessageSender")
-  serviceItemsCreated  ServiceItem[]         @relation("ServiceItemCreatedBy")
-  serviceItemsUpdated  ServiceItem[]         @relation("ServiceItemUpdatedBy")
-  packagesCreated      Package[]             @relation("PackageCreatedBy")
-  packagesUpdated      Package[]             @relation("PackageUpdatedBy")
-  packageVersionsCreated PackageVersion[]    @relation("PackageVersionCreatedBy")
-  serviceOffersCreated ServiceOffer[]        @relation("ServiceOfferCreatedBy")
-  serviceOffersUpdated ServiceOffer[]        @relation("ServiceOfferUpdatedBy")
-  serviceOffersGenerated ServiceOffer[]      @relation("ServiceOfferGeneratedBy")
-  serviceOffersSent    ServiceOffer[]        @relation("ServiceOfferSentBy")
-  serviceOffersAccepted ServiceOffer[]       @relation("ServiceOfferAcceptedBy")
-  serviceOffersCancelled ServiceOffer[]      @relation("ServiceOfferCancelledBy")
-  serviceOfferStatusChanges ServiceOfferStatusHistory[] @relation("ServiceOfferStatusChangedBy")
-  serviceOfferPaymentsRecorded ServiceOfferInstallment[] @relation("ServiceOfferInstallmentPaidBy")
+  id                            String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName                      String                      @default("User") @map("full_name")
+  email                         String                      @unique
+  username                      String                      @unique
+  mobile                        String                      @default("01700000000")
+  passwordHash                  String                      @map("password_hash")
+  photoUrl                      String?                     @map("photo_url")
+  status                        UserStatus                  @default(ACTIVE)
+  departmentId                  String?                     @map("department_id") @db.Uuid
+  teamId                        String?                     @map("team_id") @db.Uuid
+  primaryRoleId                 String?                     @map("primary_role_id") @db.Uuid
+  failedLoginAttempts           Int                         @default(0) @map("failed_login_attempts")
+  lockedUntil                   DateTime?                   @map("locked_until")
+  lastLoginAt                   DateTime?                   @map("last_login_at")
+  createdAt                     DateTime                    @default(now()) @map("created_at")
+  updatedAt                     DateTime                    @updatedAt @map("updated_at")
+  department                    Department?                 @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  team                          Team?                       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  primaryRole                   Role?                       @relation("UserPrimaryRole", fields: [primaryRoleId], references: [id], onDelete: Restrict)
+  sessions                      Session[]
+  passwordResetTokens           PasswordResetToken[]
+  permissionOverrides           UserPermissionOverride[]
+  dataScopes                    UserDataScope[]
+  roleHistory                   RoleHistory[]               @relation("RoleHistoryUser")
+  roleChangesMade               RoleHistory[]               @relation("RoleHistoryActor")
+  permissionHistory             PermissionHistory[]         @relation("PermissionHistoryUser")
+  permissionChangesMade         PermissionHistory[]         @relation("PermissionHistoryActor")
+  auditLogs                     AuditLog[]
+  activities                    Activity[]
+  masterDataCreated             MasterDataItem[]            @relation("MasterDataCreatedBy")
+  masterDataUpdated             MasterDataItem[]            @relation("MasterDataUpdatedBy")
+  employee                      Employee?
+  ownedLeads                    Lead[]                      @relation("LeadOwner")
+  createdLeads                  Lead[]                      @relation("LeadCreatedBy")
+  updatedLeads                  Lead[]                      @relation("LeadUpdatedBy")
+  assignmentFrom                LeadAssignment[]            @relation("AssignmentFrom")
+  assignmentTo                  LeadAssignment[]            @relation("AssignmentTo")
+  assignmentsMade               LeadAssignment[]            @relation("AssignmentActor")
+  qualificationHistory          LeadQualificationHistory[]
+  statusHistory                 LeadStatusHistory[]
+  defaultCountryRules           CountryAssignmentRule[]     @relation("CountryRuleDefaultOwner")
+  counselledApplications        Application[]               @relation("ApplicationCounsellor")
+  counselledStudents            Student[]                   @relation("StudentCounsellor")
+  uploadedDocuments             CrmDocument[]               @relation("DocumentUploader")
+  uploadedLeadDocuments         LeadDocument[]              @relation("LeadDocumentUploader")
+  verifiedLeadDocuments         LeadDocument[]              @relation("LeadDocumentVerifier")
+  leadDocumentActivities        LeadDocumentActivity[]      @relation("LeadDocumentActivityActor")
+  authoredLeadNotes             LeadNote[]                  @relation("LeadNoteAuthor")
+  ownedFollowUps                FollowUp[]                  @relation("FollowUpOwner")
+  notifications                 Notification[]              @relation("NotificationRecipient")
+  notificationPreferences       NotificationPreference[]
+  notificationConfigsUpdated    NotificationEventConfig[]   @relation("NotificationConfigUpdatedBy")
+  campaignsCreated              Campaign[]                  @relation("CampaignCreatedBy")
+  campaignsUpdated              Campaign[]                  @relation("CampaignUpdatedBy")
+  attributionChanges            LeadAttributionChange[]
+  whatsappConversationsAssigned WhatsAppConversation[]      @relation("WhatsAppConversationAssignee")
+  whatsappMessagesSent          WhatsAppMessage[]           @relation("WhatsAppMessageSender")
+  emailThreadsAssigned          EmailThread[]               @relation("EmailThreadAssignee")
+  emailMessagesSent             EmailMessage[]              @relation("EmailMessageSender")
+  serviceItemsCreated           ServiceItem[]               @relation("ServiceItemCreatedBy")
+  serviceItemsUpdated           ServiceItem[]               @relation("ServiceItemUpdatedBy")
+  packagesCreated               Package[]                   @relation("PackageCreatedBy")
+  packagesUpdated               Package[]                   @relation("PackageUpdatedBy")
+  packageVersionsCreated        PackageVersion[]            @relation("PackageVersionCreatedBy")
+  serviceOffersCreated          ServiceOffer[]              @relation("ServiceOfferCreatedBy")
+  serviceOffersUpdated          ServiceOffer[]              @relation("ServiceOfferUpdatedBy")
+  serviceOffersGenerated        ServiceOffer[]              @relation("ServiceOfferGeneratedBy")
+  serviceOffersSent             ServiceOffer[]              @relation("ServiceOfferSentBy")
+  serviceOffersAccepted         ServiceOffer[]              @relation("ServiceOfferAcceptedBy")
+  serviceOffersCancelled        ServiceOffer[]              @relation("ServiceOfferCancelledBy")
+  serviceOfferStatusChanges     ServiceOfferStatusHistory[] @relation("ServiceOfferStatusChangedBy")
+  serviceOfferPaymentsRecorded  ServiceOfferInstallment[]   @relation("ServiceOfferInstallmentPaidBy")
+  paymentsReceived              Payment[]                   @relation("PaymentReceivedBy")
+  paymentsCreated               Payment[]                   @relation("PaymentCreatedBy")
+  paymentsCancelled             Payment[]                   @relation("PaymentCancelledBy")
+  paymentsReversed              Payment[]                   @relation("PaymentReversedBy")
+  receiptsGenerated             Receipt[]                   @relation("ReceiptGeneratedBy")
+  ownedCrmFiles                 CrmFile[]                   @relation("CrmFileOwner")
+  openedCrmFiles                CrmFile[]                   @relation("CrmFileOpenedBy")
+  fileChecklistItemsAdded       FileChecklistItem[]         @relation("FileChecklistAddedBy")
+  uploadedFileDocumentVersions  FileDocumentVersion[]       @relation("FileDocumentVersionUploader")
+  verifiedFileDocumentVersions  FileDocumentVersion[]       @relation("FileDocumentVersionVerifier")
+  fileDocumentRequests          FileDocumentRequest[]       @relation("FileDocumentRequester")
+  fileDocumentActivities        FileDocumentActivity[]      @relation("FileDocumentActivityActor")
 
   @@index([primaryRoleId])
   @@index([departmentId])
@@ -267,33 +283,33 @@ model UserDataScope {
 }
 
 model RoleHistory {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId       String   @map("user_id") @db.Uuid
-  fromRoleId   String?  @map("from_role_id") @db.Uuid
-  toRoleId     String   @map("to_role_id") @db.Uuid
-  changedById  String?  @map("changed_by_id") @db.Uuid
-  createdAt    DateTime @default(now()) @map("created_at")
-  user         User     @relation("RoleHistoryUser", fields: [userId], references: [id], onDelete: Cascade)
-  fromRole     Role?    @relation("RoleHistoryFrom", fields: [fromRoleId], references: [id], onDelete: SetNull)
-  toRole       Role     @relation("RoleHistoryTo", fields: [toRoleId], references: [id], onDelete: Restrict)
-  changedBy    User?    @relation("RoleHistoryActor", fields: [changedById], references: [id], onDelete: SetNull)
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  fromRoleId  String?  @map("from_role_id") @db.Uuid
+  toRoleId    String   @map("to_role_id") @db.Uuid
+  changedById String?  @map("changed_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  user        User     @relation("RoleHistoryUser", fields: [userId], references: [id], onDelete: Cascade)
+  fromRole    Role?    @relation("RoleHistoryFrom", fields: [fromRoleId], references: [id], onDelete: SetNull)
+  toRole      Role     @relation("RoleHistoryTo", fields: [toRoleId], references: [id], onDelete: Restrict)
+  changedBy   User?    @relation("RoleHistoryActor", fields: [changedById], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@map("role_history")
 }
 
 model PermissionHistory {
-  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId         String?         @map("user_id") @db.Uuid
-  roleId         String?         @map("role_id") @db.Uuid
-  permissionId   String          @map("permission_id") @db.Uuid
-  previousEffect String?         @map("previous_effect")
-  newEffect      String          @map("new_effect")
-  changedById    String?         @map("changed_by_id") @db.Uuid
-  createdAt      DateTime        @default(now()) @map("created_at")
-  user           User?           @relation("PermissionHistoryUser", fields: [userId], references: [id], onDelete: Cascade)
-  permission     Permission      @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-  changedBy      User?           @relation("PermissionHistoryActor", fields: [changedById], references: [id], onDelete: SetNull)
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String?    @map("user_id") @db.Uuid
+  roleId         String?    @map("role_id") @db.Uuid
+  permissionId   String     @map("permission_id") @db.Uuid
+  previousEffect String?    @map("previous_effect")
+  newEffect      String     @map("new_effect")
+  changedById    String?    @map("changed_by_id") @db.Uuid
+  createdAt      DateTime   @default(now()) @map("created_at")
+  user           User?      @relation("PermissionHistoryUser", fields: [userId], references: [id], onDelete: Cascade)
+  permission     Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  changedBy      User?      @relation("PermissionHistoryActor", fields: [changedById], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([roleId])
@@ -318,14 +334,14 @@ model Session {
 }
 
 model PasswordResetToken {
-  id        String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId    String                @map("user_id") @db.Uuid
-  tokenHash String                @unique @map("token_hash")
-  purpose   PasswordTokenPurpose  @default(RESET)
-  expiresAt DateTime              @map("expires_at")
-  usedAt    DateTime?             @map("used_at")
-  createdAt DateTime              @default(now()) @map("created_at")
-  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String               @map("user_id") @db.Uuid
+  tokenHash String               @unique @map("token_hash")
+  purpose   PasswordTokenPurpose @default(RESET)
+  expiresAt DateTime             @map("expires_at")
+  usedAt    DateTime?            @map("used_at")
+  createdAt DateTime             @default(now()) @map("created_at")
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([userId, purpose, usedAt])
@@ -333,29 +349,29 @@ model PasswordResetToken {
 }
 
 model MasterDataItem {
-  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  categoryKey    String          @map("category_key")
-  name           String
-  nameNormalized String          @map("name_normalized")
-  code           String?
-  description    String?
-  parentId       String?         @map("parent_id") @db.Uuid
-  status         RecordStatus    @default(ACTIVE)
-  sortOrder      Int             @default(0) @map("sort_order")
-  isSystem       Boolean         @default(false) @map("is_system")
-  behaviorKey    String?         @map("behavior_key")
-  extras         Json?
-  createdById    String?         @map("created_by_id") @db.Uuid
-  updatedById    String?         @map("updated_by_id") @db.Uuid
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @default(now()) @updatedAt @map("updated_at")
-  parent         MasterDataItem? @relation("MasterDataTree", fields: [parentId], references: [id], onDelete: Restrict)
-  children       MasterDataItem[] @relation("MasterDataTree")
-  createdBy      User?           @relation("MasterDataCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy      User?           @relation("MasterDataUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  designationEmployees      Employee[] @relation("EmployeeDesignation")
-  employmentTypeEmployees   Employee[] @relation("EmployeeEmploymentType")
-  employmentStatusEmployees Employee[] @relation("EmployeeEmploymentStatus")
+  id                        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryKey               String               @map("category_key")
+  name                      String
+  nameNormalized            String               @map("name_normalized")
+  code                      String?
+  description               String?
+  parentId                  String?              @map("parent_id") @db.Uuid
+  status                    RecordStatus         @default(ACTIVE)
+  sortOrder                 Int                  @default(0) @map("sort_order")
+  isSystem                  Boolean              @default(false) @map("is_system")
+  behaviorKey               String?              @map("behavior_key")
+  extras                    Json?
+  createdById               String?              @map("created_by_id") @db.Uuid
+  updatedById               String?              @map("updated_by_id") @db.Uuid
+  createdAt                 DateTime             @default(now()) @map("created_at")
+  updatedAt                 DateTime             @default(now()) @updatedAt @map("updated_at")
+  parent                    MasterDataItem?      @relation("MasterDataTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children                  MasterDataItem[]     @relation("MasterDataTree")
+  createdBy                 User?                @relation("MasterDataCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy                 User?                @relation("MasterDataUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  designationEmployees      Employee[]           @relation("EmployeeDesignation")
+  employmentTypeEmployees   Employee[]           @relation("EmployeeEmploymentType")
+  employmentStatusEmployees Employee[]           @relation("EmployeeEmploymentStatus")
   categorizedServiceItems   ServiceItem[]        @relation("ServiceItemCategory")
   scopedServiceItems        ServiceItemCountry[] @relation("ServiceItemCountryMaster")
   packages                  Package[]            @relation("PackageCountry")
@@ -369,17 +385,17 @@ model MasterDataItem {
 }
 
 model ServiceItem {
-  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name           String
-  nameNormalized String               @unique @map("name_normalized")
-  description    String?              @db.Text
-  defaultPrice   Decimal              @map("default_price") @db.Decimal(14, 2)
-  categoryId     String               @map("category_id") @db.Uuid
-  status         RecordStatus         @default(ACTIVE)
-  createdById    String?              @map("created_by_id") @db.Uuid
-  updatedById    String?              @map("updated_by_id") @db.Uuid
-  createdAt      DateTime             @default(now()) @map("created_at")
-  updatedAt      DateTime             @default(now()) @updatedAt @map("updated_at")
+  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String
+  nameNormalized      String               @unique @map("name_normalized")
+  description         String?              @db.Text
+  defaultPrice        Decimal              @map("default_price") @db.Decimal(14, 2)
+  categoryId          String               @map("category_id") @db.Uuid
+  status              RecordStatus         @default(ACTIVE)
+  createdById         String?              @map("created_by_id") @db.Uuid
+  updatedById         String?              @map("updated_by_id") @db.Uuid
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @default(now()) @updatedAt @map("updated_at")
   category            MasterDataItem       @relation("ServiceItemCategory", fields: [categoryId], references: [id], onDelete: Restrict)
   countries           ServiceItemCountry[]
   packageVersionItems PackageVersionItem[]
@@ -490,62 +506,63 @@ enum OfferLineKind {
 }
 
 model ServiceOffer {
-  id                     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  leadId                 String             @map("lead_id") @db.Uuid
-  status                 ServiceOfferStatus @default(DRAFT)
-  sourcePackageId        String?            @map("source_package_id") @db.Uuid
-  sourcePackageVersionId String?            @map("source_package_version_id") @db.Uuid
-  packageName            String?            @map("package_name")
-  versionNumber          Int?               @map("version_number")
-  packageDefaultPrice    Decimal?           @map("package_default_price") @db.Decimal(14, 2)
-  packagePrice           Decimal?           @map("package_price") @db.Decimal(14, 2)
-  individualTotal        Decimal            @default(0) @map("individual_total") @db.Decimal(14, 2)
-  saving                 Decimal            @default(0) @db.Decimal(14, 2)
-  fileOpeningDefault     Decimal?           @map("file_opening_default") @db.Decimal(14, 2)
-  fileOpeningCharge      Decimal            @default(0) @map("file_opening_charge") @db.Decimal(14, 2)
-  grossTotal             Decimal            @default(0) @map("gross_total") @db.Decimal(14, 2)
-  lineDiscountTotal      Decimal            @default(0) @map("line_discount_total") @db.Decimal(14, 2)
-  subtotal               Decimal            @default(0) @db.Decimal(14, 2)
-  overallDiscountType    DiscountType?      @map("overall_discount_type")
-  overallDiscountValue   Decimal?           @map("overall_discount_value") @db.Decimal(14, 2)
-  overallDiscountAmount  Decimal            @default(0) @map("overall_discount_amount") @db.Decimal(14, 2)
-  overallDiscountReason  String?            @map("overall_discount_reason") @db.Text
-  finalPayable           Decimal            @map("final_price") @db.Decimal(14, 2)
-  expectedDealValue      Decimal?           @map("expected_deal_value") @db.Decimal(14, 2)
-  initialPayment         Decimal?           @map("initial_payment") @db.Decimal(14, 2)
-  generatedAt            DateTime?          @map("generated_at")
-  generatedById          String?            @map("generated_by_id") @db.Uuid
-  offerVersion           Int                @default(1) @map("offer_version")
-  revisedFromId          String?            @map("revised_from_id") @db.Uuid
-  sentAt                 DateTime?          @map("sent_at")
-  sentById               String?            @map("sent_by_id") @db.Uuid
-  validUntil             DateTime?          @map("valid_until")
-  acceptedAt             DateTime?          @map("accepted_at")
-  acceptedById           String?            @map("accepted_by_id") @db.Uuid
+  id                     String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId                 String                      @map("lead_id") @db.Uuid
+  status                 ServiceOfferStatus          @default(DRAFT)
+  sourcePackageId        String?                     @map("source_package_id") @db.Uuid
+  sourcePackageVersionId String?                     @map("source_package_version_id") @db.Uuid
+  packageName            String?                     @map("package_name")
+  versionNumber          Int?                        @map("version_number")
+  packageDefaultPrice    Decimal?                    @map("package_default_price") @db.Decimal(14, 2)
+  packagePrice           Decimal?                    @map("package_price") @db.Decimal(14, 2)
+  individualTotal        Decimal                     @default(0) @map("individual_total") @db.Decimal(14, 2)
+  saving                 Decimal                     @default(0) @db.Decimal(14, 2)
+  fileOpeningDefault     Decimal?                    @map("file_opening_default") @db.Decimal(14, 2)
+  fileOpeningCharge      Decimal                     @default(0) @map("file_opening_charge") @db.Decimal(14, 2)
+  grossTotal             Decimal                     @default(0) @map("gross_total") @db.Decimal(14, 2)
+  lineDiscountTotal      Decimal                     @default(0) @map("line_discount_total") @db.Decimal(14, 2)
+  subtotal               Decimal                     @default(0) @db.Decimal(14, 2)
+  overallDiscountType    DiscountType?               @map("overall_discount_type")
+  overallDiscountValue   Decimal?                    @map("overall_discount_value") @db.Decimal(14, 2)
+  overallDiscountAmount  Decimal                     @default(0) @map("overall_discount_amount") @db.Decimal(14, 2)
+  overallDiscountReason  String?                     @map("overall_discount_reason") @db.Text
+  finalPayable           Decimal                     @map("final_price") @db.Decimal(14, 2)
+  expectedDealValue      Decimal?                    @map("expected_deal_value") @db.Decimal(14, 2)
+  initialPayment         Decimal?                    @map("initial_payment") @db.Decimal(14, 2)
+  generatedAt            DateTime?                   @map("generated_at")
+  generatedById          String?                     @map("generated_by_id") @db.Uuid
+  offerVersion           Int                         @default(1) @map("offer_version")
+  revisedFromId          String?                     @map("revised_from_id") @db.Uuid
+  sentAt                 DateTime?                   @map("sent_at")
+  sentById               String?                     @map("sent_by_id") @db.Uuid
+  validUntil             DateTime?                   @map("valid_until")
+  acceptedAt             DateTime?                   @map("accepted_at")
+  acceptedById           String?                     @map("accepted_by_id") @db.Uuid
   /// Version, total, and selected services captured at the moment of acceptance.
-  acceptedSnapshot       Json?              @map("accepted_snapshot")
-  rejectedAt             DateTime?          @map("rejected_at")
-  rejectionReason        String?            @map("rejection_reason") @db.Text
-  cancelledAt            DateTime?          @map("cancelled_at")
-  cancelledById          String?            @map("cancelled_by_id") @db.Uuid
-  cancelReason           String?            @map("cancel_reason") @db.Text
-  createdById            String?            @map("created_by_id") @db.Uuid
-  updatedById            String?            @map("updated_by_id") @db.Uuid
-  createdAt              DateTime           @default(now()) @map("created_at")
-  updatedAt              DateTime           @default(now()) @updatedAt @map("updated_at")
-  lead                   Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  sourcePackage          Package?           @relation(fields: [sourcePackageId], references: [id], onDelete: SetNull)
-  sourceVersion          PackageVersion?    @relation(fields: [sourcePackageVersionId], references: [id], onDelete: Restrict)
+  acceptedSnapshot       Json?                       @map("accepted_snapshot")
+  rejectedAt             DateTime?                   @map("rejected_at")
+  rejectionReason        String?                     @map("rejection_reason") @db.Text
+  cancelledAt            DateTime?                   @map("cancelled_at")
+  cancelledById          String?                     @map("cancelled_by_id") @db.Uuid
+  cancelReason           String?                     @map("cancel_reason") @db.Text
+  createdById            String?                     @map("created_by_id") @db.Uuid
+  updatedById            String?                     @map("updated_by_id") @db.Uuid
+  createdAt              DateTime                    @default(now()) @map("created_at")
+  updatedAt              DateTime                    @default(now()) @updatedAt @map("updated_at")
+  lead                   Lead                        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  sourcePackage          Package?                    @relation(fields: [sourcePackageId], references: [id], onDelete: SetNull)
+  sourceVersion          PackageVersion?             @relation(fields: [sourcePackageVersionId], references: [id], onDelete: Restrict)
   items                  ServiceOfferItem[]
   installments           ServiceOfferInstallment[]
-  generatedBy            User?              @relation("ServiceOfferGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
-  createdBy              User?              @relation("ServiceOfferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy              User?              @relation("ServiceOfferUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  sentBy                 User?              @relation("ServiceOfferSentBy", fields: [sentById], references: [id], onDelete: SetNull)
-  acceptedBy             User?              @relation("ServiceOfferAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
-  cancelledBy            User?              @relation("ServiceOfferCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
-  revisedFrom            ServiceOffer?      @relation("ServiceOfferRevision", fields: [revisedFromId], references: [id], onDelete: Restrict)
-  revisions              ServiceOffer[]     @relation("ServiceOfferRevision")
+  payments               Payment[]
+  generatedBy            User?                       @relation("ServiceOfferGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+  createdBy              User?                       @relation("ServiceOfferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy              User?                       @relation("ServiceOfferUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  sentBy                 User?                       @relation("ServiceOfferSentBy", fields: [sentById], references: [id], onDelete: SetNull)
+  acceptedBy             User?                       @relation("ServiceOfferAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull)
+  cancelledBy            User?                       @relation("ServiceOfferCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  revisedFrom            ServiceOffer?               @relation("ServiceOfferRevision", fields: [revisedFromId], references: [id], onDelete: Restrict)
+  revisions              ServiceOffer[]              @relation("ServiceOfferRevision")
   statusHistory          ServiceOfferStatusHistory[]
 
   @@unique([leadId, offerVersion])
@@ -598,22 +615,121 @@ model ServiceOfferItem {
 }
 
 model ServiceOfferInstallment {
-  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  serviceOfferId String       @map("service_offer_id") @db.Uuid
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serviceOfferId String              @map("service_offer_id") @db.Uuid
   sequence       Int
-  amount         Decimal      @db.Decimal(14, 2)
+  amount         Decimal             @db.Decimal(14, 2)
   purpose        String
-  dueDate        DateTime?    @map("due_date") @db.Date
-  status         String       @default("PENDING")
-  paidAt         DateTime?    @map("paid_at")
-  paidById       String?      @map("paid_by_id") @db.Uuid
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
-  serviceOffer   ServiceOffer @relation(fields: [serviceOfferId], references: [id], onDelete: Cascade)
-  paidBy         User?        @relation("ServiceOfferInstallmentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  dueDate        DateTime?           @map("due_date") @db.Date
+  status         String              @default("PENDING")
+  paidAt         DateTime?           @map("paid_at")
+  paidById       String?             @map("paid_by_id") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @default(now()) @updatedAt @map("updated_at")
+  serviceOffer   ServiceOffer        @relation(fields: [serviceOfferId], references: [id], onDelete: Cascade)
+  paidBy         User?               @relation("ServiceOfferInstallmentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  allocations    PaymentAllocation[]
 
   @@unique([serviceOfferId, sequence])
   @@map("service_offer_installments")
+}
+
+enum PaymentTxnStatus {
+  COMPLETED
+  PENDING
+  FAILED
+  CANCELLED
+  REVERSED
+}
+
+enum ReceiptStatus {
+  GENERATED
+  VOID
+}
+
+/// Sequential counters for Payment ID / Receipt Number (PAY-######, RCP-######).
+model DocumentSequence {
+  key       String   @id
+  nextValue Int      @default(1) @map("next_value")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("document_sequences")
+}
+
+model Payment {
+  id                 String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentNumber      String              @unique @map("payment_number")
+  leadId             String              @map("lead_id") @db.Uuid
+  serviceOfferId     String              @map("service_offer_id") @db.Uuid
+  amount             Decimal             @db.Decimal(14, 2)
+  currency           String              @default("BDT")
+  methodCode         String              @map("method_code")
+  methodName         String              @map("method_name")
+  transactionRef     String?             @map("transaction_ref")
+  paymentDate        DateTime            @map("payment_date") @db.Date
+  notes              String?             @db.VarChar(500)
+  status             PaymentTxnStatus    @default(COMPLETED)
+  previousPaidAmount Decimal             @default(0) @map("previous_paid_amount") @db.Decimal(14, 2)
+  remainingDueAmount Decimal             @default(0) @map("remaining_due_amount") @db.Decimal(14, 2)
+  receivedById       String              @map("received_by_id") @db.Uuid
+  createdById        String?             @map("created_by_id") @db.Uuid
+  cancelledAt        DateTime?           @map("cancelled_at")
+  cancelledById      String?             @map("cancelled_by_id") @db.Uuid
+  cancelReason       String?             @map("cancel_reason") @db.Text
+  reversedAt         DateTime?           @map("reversed_at")
+  reversedById       String?             @map("reversed_by_id") @db.Uuid
+  reverseReason      String?             @map("reverse_reason") @db.Text
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @default(now()) @updatedAt @map("updated_at")
+  lead               Lead                @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  serviceOffer       ServiceOffer        @relation(fields: [serviceOfferId], references: [id], onDelete: Restrict)
+  receivedBy         User                @relation("PaymentReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  createdBy          User?               @relation("PaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  cancelledBy        User?               @relation("PaymentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  reversedBy         User?               @relation("PaymentReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  receipt            Receipt?
+  allocations        PaymentAllocation[]
+
+  @@index([leadId, createdAt])
+  @@index([serviceOfferId, createdAt])
+  @@index([status])
+  @@index([methodCode])
+  @@index([paymentDate])
+  @@index([receivedById])
+  @@index([transactionRef])
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId     String                   @map("payment_id") @db.Uuid
+  installmentId String?                  @map("installment_id") @db.Uuid
+  offerItemId   String?                  @map("offer_item_id") @db.Uuid
+  label         String
+  amount        Decimal                  @db.Decimal(14, 2)
+  createdAt     DateTime                 @default(now()) @map("created_at")
+  payment       Payment                  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  installment   ServiceOfferInstallment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
+
+  @@index([paymentId])
+  @@index([installmentId])
+  @@map("payment_allocations")
+}
+
+model Receipt {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  receiptNumber String        @unique @map("receipt_number")
+  paymentId     String        @unique @map("payment_id") @db.Uuid
+  status        ReceiptStatus @default(GENERATED)
+  /// Immutable receipt content captured at generation time (no VAT/tax).
+  snapshot      Json
+  generatedAt   DateTime      @default(now()) @map("generated_at")
+  generatedById String?       @map("generated_by_id") @db.Uuid
+  payment       Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  generatedBy   User?         @relation("ReceiptGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+
+  @@index([generatedAt])
+  @@map("receipts")
 }
 
 model AuditLog {
@@ -636,24 +752,24 @@ model AuditLog {
 }
 
 model Activity {
-  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  type         ActivityType
-  userId       String       @map("user_id") @db.Uuid
-  occurredAt   DateTime     @default(now()) @map("occurred_at")
-  durationMin  Int?         @map("duration_min")
-  outcome      String?
-  notes        String?      @db.Text
-  relatedName  String?      @map("related_name")
-  relatedType  String?      @map("related_type")
-  relatedId    String?      @map("related_id")
-  nextAction   String?      @map("next_action")
-  nextDate     DateTime?    @map("next_date")
-  ipAddress    String?      @map("ip_address")
-  userAgent    String?      @map("user_agent") @db.Text
-  metadata     Json?
-  createdAt    DateTime     @default(now()) @map("created_at")
-  updatedAt    DateTime     @default(now()) @updatedAt @map("updated_at")
-  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        ActivityType
+  userId      String       @map("user_id") @db.Uuid
+  occurredAt  DateTime     @default(now()) @map("occurred_at")
+  durationMin Int?         @map("duration_min")
+  outcome     String?
+  notes       String?      @db.Text
+  relatedName String?      @map("related_name")
+  relatedType String?      @map("related_type")
+  relatedId   String?      @map("related_id")
+  nextAction  String?      @map("next_action")
+  nextDate    DateTime?    @map("next_date")
+  ipAddress   String?      @map("ip_address")
+  userAgent   String?      @map("user_agent") @db.Text
+  metadata    Json?
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @default(now()) @updatedAt @map("updated_at")
+  user        User         @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([userId])
   @@index([type])
@@ -663,49 +779,49 @@ model Activity {
 }
 
 model Employee {
-  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeCode          String          @unique @map("employee_code")
-  fullName              String          @map("full_name")
+  id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeCode          String             @unique @map("employee_code")
+  fullName              String             @map("full_name")
   gender                Gender?
-  dateOfBirth           DateTime?       @map("date_of_birth") @db.Date
+  dateOfBirth           DateTime?          @map("date_of_birth") @db.Date
   nationality           String?
-  identityNumber        String?         @map("identity_number")
-  maritalStatus         MaritalStatus?  @map("marital_status")
+  identityNumber        String?            @map("identity_number")
+  maritalStatus         MaritalStatus?     @map("marital_status")
   mobile                String
-  personalEmail         String?         @map("personal_email")
-  officialEmail         String          @unique @map("official_email")
-  presentAddress        String?         @map("present_address") @db.Text
-  permanentAddress      String?         @map("permanent_address") @db.Text
-  photoUrl              String?         @map("photo_url")
-  designationId         String          @map("designation_id") @db.Uuid
-  departmentId          String          @map("department_id") @db.Uuid
-  teamId                String?         @map("team_id") @db.Uuid
-  roleId                String?         @map("role_id") @db.Uuid
-  employmentTypeId      String          @map("employment_type_id") @db.Uuid
-  employmentStatusId    String          @map("employment_status_id") @db.Uuid
-  reportingManagerId    String?         @map("reporting_manager_id") @db.Uuid
-  joiningDate           DateTime        @map("joining_date") @db.Date
-  resignationDate       DateTime?       @map("resignation_date") @db.Date
-  terminationDate       DateTime?       @map("termination_date") @db.Date
-  terminationReason     String?         @map("termination_reason")
-  terminationRemarks    String?         @map("termination_remarks") @db.Text
-  rejoiningDate         DateTime?       @map("rejoining_date") @db.Date
-  emergencyName         String?         @map("emergency_name")
-  emergencyRelationship String?         @map("emergency_relationship")
-  emergencyMobile       String?         @map("emergency_mobile")
-  emergencyAddress      String?         @map("emergency_address") @db.Text
-  userId                String?         @unique @map("user_id") @db.Uuid
-  createdAt             DateTime        @default(now()) @map("created_at")
-  updatedAt             DateTime        @updatedAt @map("updated_at")
-  designation           MasterDataItem  @relation("EmployeeDesignation", fields: [designationId], references: [id], onDelete: Restrict)
-  employmentType        MasterDataItem  @relation("EmployeeEmploymentType", fields: [employmentTypeId], references: [id], onDelete: Restrict)
-  employmentStatus      MasterDataItem  @relation("EmployeeEmploymentStatus", fields: [employmentStatusId], references: [id], onDelete: Restrict)
-  department            Department      @relation(fields: [departmentId], references: [id], onDelete: Restrict)
-  team                  Team?           @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  role                  Role?           @relation("EmployeeRole", fields: [roleId], references: [id], onDelete: SetNull)
-  reportingManager      Employee?       @relation("EmployeeReports", fields: [reportingManagerId], references: [id], onDelete: SetNull)
-  directReports         Employee[]      @relation("EmployeeReports")
-  user                  User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  personalEmail         String?            @map("personal_email")
+  officialEmail         String             @unique @map("official_email")
+  presentAddress        String?            @map("present_address") @db.Text
+  permanentAddress      String?            @map("permanent_address") @db.Text
+  photoUrl              String?            @map("photo_url")
+  designationId         String             @map("designation_id") @db.Uuid
+  departmentId          String             @map("department_id") @db.Uuid
+  teamId                String?            @map("team_id") @db.Uuid
+  roleId                String?            @map("role_id") @db.Uuid
+  employmentTypeId      String             @map("employment_type_id") @db.Uuid
+  employmentStatusId    String             @map("employment_status_id") @db.Uuid
+  reportingManagerId    String?            @map("reporting_manager_id") @db.Uuid
+  joiningDate           DateTime           @map("joining_date") @db.Date
+  resignationDate       DateTime?          @map("resignation_date") @db.Date
+  terminationDate       DateTime?          @map("termination_date") @db.Date
+  terminationReason     String?            @map("termination_reason")
+  terminationRemarks    String?            @map("termination_remarks") @db.Text
+  rejoiningDate         DateTime?          @map("rejoining_date") @db.Date
+  emergencyName         String?            @map("emergency_name")
+  emergencyRelationship String?            @map("emergency_relationship")
+  emergencyMobile       String?            @map("emergency_mobile")
+  emergencyAddress      String?            @map("emergency_address") @db.Text
+  userId                String?            @unique @map("user_id") @db.Uuid
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+  designation           MasterDataItem     @relation("EmployeeDesignation", fields: [designationId], references: [id], onDelete: Restrict)
+  employmentType        MasterDataItem     @relation("EmployeeEmploymentType", fields: [employmentTypeId], references: [id], onDelete: Restrict)
+  employmentStatus      MasterDataItem     @relation("EmployeeEmploymentStatus", fields: [employmentStatusId], references: [id], onDelete: Restrict)
+  department            Department         @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  team                  Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  role                  Role?              @relation("EmployeeRole", fields: [roleId], references: [id], onDelete: SetNull)
+  reportingManager      Employee?          @relation("EmployeeReports", fields: [reportingManagerId], references: [id], onDelete: SetNull)
+  directReports         Employee[]         @relation("EmployeeReports")
+  user                  User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
   documents             EmployeeDocument[]
 
   @@index([departmentId])
@@ -721,41 +837,41 @@ model Employee {
 }
 
 model EmployeeDocument {
-  id         String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeId String                @map("employee_id") @db.Uuid
+  id         String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId String               @map("employee_id") @db.Uuid
   type       EmployeeDocumentType
-  fileName   String                @map("file_name")
-  mimeType   String                @map("mime_type")
-  storageKey String                @map("storage_key")
-  fileSize   Int                   @map("file_size")
-  createdAt  DateTime              @default(now()) @map("created_at")
-  employee   Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  fileName   String               @map("file_name")
+  mimeType   String               @map("mime_type")
+  storageKey String               @map("storage_key")
+  fileSize   Int                  @map("file_size")
+  createdAt  DateTime             @default(now()) @map("created_at")
+  employee   Employee             @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([employeeId])
   @@map("employee_documents")
 }
 
 model Lead {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code      String   @unique
-  name      String
-  phone     String?
-  phoneNormalized     String?  @map("phone_normalized")
-  phoneCountryCode       String?  @map("phone_country_code")
-  whatsapp               String?
-  whatsappCountryCode    String?  @map("whatsapp_country_code")
-  whatsappSameAsPhone    Boolean  @default(false) @map("whatsapp_same_as_phone")
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                String    @unique
+  name                String
+  phone               String?
+  phoneNormalized     String?   @map("phone_normalized")
+  phoneCountryCode    String?   @map("phone_country_code")
+  whatsapp            String?
+  whatsappCountryCode String?   @map("whatsapp_country_code")
+  whatsappSameAsPhone Boolean   @default(false) @map("whatsapp_same_as_phone")
   email               String?
   dateOfBirth         DateTime? @map("date_of_birth") @db.Date
-  currentLocation     String?  @map("current_location")
+  currentLocation     String?   @map("current_location")
 
-  country                 String?
-  preferredCountryCode    String?  @map("preferred_country_code")
-  preferredDegreeCode     String?  @map("preferred_degree_code")
-  preferredCourse         String?  @map("preferred_course")
-  preferredIntakeCode     String?  @map("preferred_intake_code")
-  studyPurposeCode        String?  @map("study_purpose_code")
-  studyPurposeOther       String?  @map("study_purpose_other")
+  country              String?
+  preferredCountryCode String? @map("preferred_country_code")
+  preferredDegreeCode  String? @map("preferred_degree_code")
+  preferredCourse      String? @map("preferred_course")
+  preferredIntakeCode  String? @map("preferred_intake_code")
+  studyPurposeCode     String? @map("study_purpose_code")
+  studyPurposeOther    String? @map("study_purpose_other")
 
   highestQualificationCode String? @map("highest_qualification_code")
   institutionName          String? @map("institution_name")
@@ -772,9 +888,9 @@ model Lead {
   writing         Float?
   speaking        Float?
 
-  estimatedBudgetCode      String? @map("estimated_budget_code")
-  fundingSourceCode        String? @map("funding_source_code")
-  financialReadinessCode   String? @map("financial_readiness_code")
+  estimatedBudgetCode    String? @map("estimated_budget_code")
+  fundingSourceCode      String? @map("funding_source_code")
+  financialReadinessCode String? @map("financial_readiness_code")
 
   previouslyAppliedAbroad Boolean? @map("previously_applied_abroad")
   previousVisaApplication Boolean? @map("previous_visa_application")
@@ -787,40 +903,40 @@ model Lead {
   refusalYear             Int?     @map("refusal_year")
   refusalReason           String?  @map("refusal_reason")
 
-  decisionTimelineCode       String? @map("decision_timeline_code")
-  decisionMakerCode          String? @map("decision_maker_code")
-  applicationReadinessCode   String? @map("application_readiness_code")
-  studyIntentCode            String? @map("study_intent_code")
+  decisionTimelineCode     String? @map("decision_timeline_code")
+  decisionMakerCode        String? @map("decision_maker_code")
+  applicationReadinessCode String? @map("application_readiness_code")
+  studyIntentCode          String? @map("study_intent_code")
 
   preferredContactMethodCode String? @map("preferred_contact_method_code")
   preferredContactTimeCode   String? @map("preferred_contact_time_code")
   specificContactTime        String? @map("specific_contact_time")
 
-  source           String?
-  sourceCode       String?  @map("source_code")
-  channelCode      String?  @map("channel_code")
-  sourceLocked     Boolean  @default(false) @map("source_locked")
-  latestSource     String?  @map("latest_source")
-  latestSourceCode String?  @map("latest_source_code")
-  latestChannelCode String? @map("latest_channel_code")
-  campaign       String?
-  campaignId     String?  @map("campaign_id") @db.Uuid
-  latestCampaign   String?  @map("latest_campaign")
-  latestCampaignId String?  @map("latest_campaign_id") @db.Uuid
-  utmSource      String?  @map("utm_source")
-  utmMedium      String?  @map("utm_medium")
-  utmCampaign    String?  @map("utm_campaign")
-  utmContent     String?  @map("utm_content")
-  utmTerm        String?  @map("utm_term")
-  landingPageUrl String?  @map("landing_page_url") @db.Text
-  externalLeadId String?  @unique @map("external_lead_id")
-  sourceDetails  String?  @map("source_details") @db.VarChar(500)
-  referralBy     String?  @map("referral_by")
-  referralDetails String? @map("referral_details") @db.Text
-  firstTouchAt   DateTime? @map("first_touch_at")
-  remarks        String?  @db.Text
-  notes          String?  @db.Text
-  lastEnquiryAt  DateTime? @map("last_enquiry_at")
+  source            String?
+  sourceCode        String?   @map("source_code")
+  channelCode       String?   @map("channel_code")
+  sourceLocked      Boolean   @default(false) @map("source_locked")
+  latestSource      String?   @map("latest_source")
+  latestSourceCode  String?   @map("latest_source_code")
+  latestChannelCode String?   @map("latest_channel_code")
+  campaign          String?
+  campaignId        String?   @map("campaign_id") @db.Uuid
+  latestCampaign    String?   @map("latest_campaign")
+  latestCampaignId  String?   @map("latest_campaign_id") @db.Uuid
+  utmSource         String?   @map("utm_source")
+  utmMedium         String?   @map("utm_medium")
+  utmCampaign       String?   @map("utm_campaign")
+  utmContent        String?   @map("utm_content")
+  utmTerm           String?   @map("utm_term")
+  landingPageUrl    String?   @map("landing_page_url") @db.Text
+  externalLeadId    String?   @unique @map("external_lead_id")
+  sourceDetails     String?   @map("source_details") @db.VarChar(500)
+  referralBy        String?   @map("referral_by")
+  referralDetails   String?   @map("referral_details") @db.Text
+  firstTouchAt      DateTime? @map("first_touch_at")
+  remarks           String?   @db.Text
+  notes             String?   @db.Text
+  lastEnquiryAt     DateTime? @map("last_enquiry_at")
 
   assignedCountryTeamId String? @map("assigned_country_team_id") @db.Uuid
   ownerName             String? @map("owner_name")
@@ -830,13 +946,13 @@ model Lead {
   lostReasonCode        String? @map("lost_reason_code")
   closeReasonCode       String? @map("close_reason_code")
 
-  academicFitCode            String? @map("academic_fit_code")
-  englishReadinessCode       String? @map("english_readiness_code")
-  countryIntakeFitCode       String? @map("country_intake_fit_code")
-  studyIntentQualCode        String? @map("study_intent_qual_code")
-  qualificationResultCode    String? @map("qualification_result_code")
-  unqualifiedReasonCode      String? @map("unqualified_reason_code")
-  unqualifiedRemarks         String? @map("unqualified_remarks") @db.Text
+  academicFitCode         String? @map("academic_fit_code")
+  englishReadinessCode    String? @map("english_readiness_code")
+  countryIntakeFitCode    String? @map("country_intake_fit_code")
+  studyIntentQualCode     String? @map("study_intent_qual_code")
+  qualificationResultCode String? @map("qualification_result_code")
+  unqualifiedReasonCode   String? @map("unqualified_reason_code")
+  unqualifiedRemarks      String? @map("unqualified_remarks") @db.Text
 
   profileCompletion      Int     @default(0) @map("profile_completion")
   leadScore              Int     @default(0) @map("lead_score")
@@ -854,28 +970,30 @@ model Lead {
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  owner               User?  @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  assignedCountryTeam Team?  @relation("LeadCountryTeam", fields: [assignedCountryTeamId], references: [id], onDelete: SetNull)
-  createdBy           User?  @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy           User?  @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  marketingCampaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  latestMarketingCampaign Campaign? @relation("LeadLatestCampaign", fields: [latestCampaignId], references: [id], onDelete: SetNull)
-  duplicateOf         Lead?  @relation("LeadDuplicates", fields: [duplicateOfLeadId], references: [id], onDelete: SetNull)
-  duplicates          Lead[] @relation("LeadDuplicates")
-  assignments         LeadAssignment[]
-  qualificationHistory LeadQualificationHistory[]
-  statusHistory       LeadStatusHistory[]
-  notesHistory        LeadNote[]
-  followUps           FollowUp[]
-  notifications       Notification[]
-  communicationEvents CommunicationEvent[]
-  metaLeads           MetaLead[]
-  campaignTouches     LeadCampaignTouch[]
-  attributionChanges  LeadAttributionChange[]
-  whatsappConversations WhatsAppConversation[]
-  emailThreads        EmailThread[]
-  serviceOffers       ServiceOffer[]
-  documents           LeadDocument[]
+  owner                   User?                      @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  assignedCountryTeam     Team?                      @relation("LeadCountryTeam", fields: [assignedCountryTeamId], references: [id], onDelete: SetNull)
+  createdBy               User?                      @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy               User?                      @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  marketingCampaign       Campaign?                  @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  latestMarketingCampaign Campaign?                  @relation("LeadLatestCampaign", fields: [latestCampaignId], references: [id], onDelete: SetNull)
+  duplicateOf             Lead?                      @relation("LeadDuplicates", fields: [duplicateOfLeadId], references: [id], onDelete: SetNull)
+  duplicates              Lead[]                     @relation("LeadDuplicates")
+  assignments             LeadAssignment[]
+  qualificationHistory    LeadQualificationHistory[]
+  statusHistory           LeadStatusHistory[]
+  notesHistory            LeadNote[]
+  followUps               FollowUp[]
+  notifications           Notification[]
+  communicationEvents     CommunicationEvent[]
+  metaLeads               MetaLead[]
+  campaignTouches         LeadCampaignTouch[]
+  attributionChanges      LeadAttributionChange[]
+  whatsappConversations   WhatsAppConversation[]
+  emailThreads            EmailThread[]
+  serviceOffers           ServiceOffer[]
+  documents               LeadDocument[]
+  payments                Payment[]
+  crmFile                 CrmFile?
 
   @@index([status])
   @@index([ownerId])
@@ -906,21 +1024,110 @@ model LeadNote {
   @@map("lead_notes")
 }
 
+enum LeadDocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+  REPLACED
+
+  @@map("lead_document_status")
+}
+
+enum LeadDocumentActivityAction {
+  UPLOADED
+  VIEWED
+  DOWNLOADED
+  VERIFIED
+  REJECTED
+  REPLACED
+  ARCHIVED
+  RESTORED
+
+  @@map("lead_document_activity_action")
+}
+
+enum DocumentChecklistStage {
+  LEAD
+  FILE
+
+  @@map("document_checklist_stage")
+}
+
 model LeadDocument {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  leadId       String   @map("lead_id") @db.Uuid
-  fileName     String   @map("file_name")
-  mimeType     String   @map("mime_type")
-  storageKey   String   @map("storage_key")
-  fileSize     Int      @map("file_size")
-  uploadedById String?  @map("uploaded_by_id") @db.Uuid
-  createdAt    DateTime @default(now()) @map("created_at")
-  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  uploadedBy   User?    @relation("LeadDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId              String                 @map("lead_id") @db.Uuid
+  documentGroupId     String                 @default(dbgenerated("gen_random_uuid()")) @map("document_group_id") @db.Uuid
+  categoryCode        String                 @default("OTHER") @map("category_code")
+  typeCode            String                 @default("OTHER") @map("type_code")
+  name                String                 @default("")
+  fileName            String                 @map("file_name")
+  mimeType            String                 @map("mime_type")
+  storageKey          String                 @map("storage_key")
+  fileSize            Int                    @map("file_size")
+  versionNumber       Int                    @default(1) @map("version_number")
+  isLatest            Boolean                @default(true) @map("is_latest")
+  status              LeadDocumentStatus     @default(PENDING)
+  documentDate        DateTime?              @map("document_date") @db.Date
+  expiryDate          DateTime?              @map("expiry_date") @db.Date
+  remarks             String?                @db.Text
+  isSensitive         Boolean                @default(false) @map("is_sensitive")
+  verifiedById        String?                @map("verified_by_id") @db.Uuid
+  verifiedAt          DateTime?              @map("verified_at")
+  verificationRemarks String?                @map("verification_remarks") @db.Text
+  rejectionReason     String?                @map("rejection_reason") @db.Text
+  archivedAt          DateTime?              @map("archived_at")
+  uploadedById        String?                @map("uploaded_by_id") @db.Uuid
+  createdAt           DateTime               @default(now()) @map("created_at")
+  updatedAt           DateTime               @default(now()) @updatedAt @map("updated_at")
+  lead                Lead                   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  uploadedBy          User?                  @relation("LeadDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  verifiedBy          User?                  @relation("LeadDocumentVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+  activities          LeadDocumentActivity[]
 
   @@index([leadId])
+  @@index([leadId, typeCode, isLatest])
+  @@index([documentGroupId])
   @@index([uploadedById])
+  @@index([verifiedById])
+  @@index([status])
+  @@index([expiryDate])
+  @@index([archivedAt])
   @@map("lead_documents")
+}
+
+model LeadDocumentActivity {
+  id         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String                     @map("document_id") @db.Uuid
+  action     LeadDocumentActivityAction
+  notes      String?                    @db.Text
+  metadata   Json?
+  userId     String?                    @map("user_id") @db.Uuid
+  createdAt  DateTime                   @default(now()) @map("created_at")
+  document   LeadDocument               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User?                      @relation("LeadDocumentActivityActor", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+  @@index([userId])
+  @@map("lead_document_activities")
+}
+
+model DocumentChecklistRule {
+  id           String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryCode String                 @map("category_code")
+  typeCode     String                 @map("type_code")
+  name         String
+  stage        DocumentChecklistStage @default(LEAD)
+  isRequired   Boolean                @default(true) @map("is_required")
+  isSensitive  Boolean                @default(false) @map("is_sensitive")
+  sortOrder    Int                    @default(0) @map("sort_order")
+  isActive     Boolean                @default(true) @map("is_active")
+  createdAt    DateTime               @default(now()) @map("created_at")
+  updatedAt    DateTime               @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([stage, typeCode])
+  @@index([stage, isActive, sortOrder])
+  @@map("document_checklist_rules")
 }
 
 model CountryAssignmentRule {
@@ -958,10 +1165,10 @@ model LeadAssignment {
   handoverNote Json?              @map("handover_note")
   createdById  String?            @map("created_by_id") @db.Uuid
   createdAt    DateTime           @default(now()) @map("created_at")
-  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  fromOwner   User?    @relation("AssignmentFrom", fields: [fromOwnerId], references: [id], onDelete: SetNull)
-  toOwner     User?    @relation("AssignmentTo", fields: [toOwnerId], references: [id], onDelete: SetNull)
-  createdBy   User?    @relation("AssignmentActor", fields: [createdById], references: [id], onDelete: SetNull)
+  lead         Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fromOwner    User?              @relation("AssignmentFrom", fields: [fromOwnerId], references: [id], onDelete: SetNull)
+  toOwner      User?              @relation("AssignmentTo", fields: [toOwnerId], references: [id], onDelete: SetNull)
+  createdBy    User?              @relation("AssignmentActor", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([leadId])
   @@index([createdAt])
@@ -969,15 +1176,15 @@ model LeadAssignment {
 }
 
 model LeadQualificationHistory {
-  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  leadId     String   @map("lead_id") @db.Uuid
-  result     String?
-  reason     String?
-  snapshot   Json?
-  createdById String? @map("created_by_id") @db.Uuid
-  createdAt  DateTime @default(now()) @map("created_at")
-  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  createdBy  User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId      String   @map("lead_id") @db.Uuid
+  result      String?
+  reason      String?
+  snapshot    Json?
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([leadId])
   @@map("lead_qualification_history")
@@ -1005,19 +1212,19 @@ model LeadStatusHistory {
 }
 
 model Application {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code            String   @unique
-  applicantName   String   @map("applicant_name")
-  university      String?
-  program         String?
-  intake          String?
-  counsellorName  String?  @map("counsellor_name")
-  counsellorId    String?  @map("counsellor_id") @db.Uuid
-  status          String
-  submittedAt     DateTime? @map("submitted_at")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
-  counsellor      User?    @relation("ApplicationCounsellor", fields: [counsellorId], references: [id], onDelete: SetNull)
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code           String    @unique
+  applicantName  String    @map("applicant_name")
+  university     String?
+  program        String?
+  intake         String?
+  counsellorName String?   @map("counsellor_name")
+  counsellorId   String?   @map("counsellor_id") @db.Uuid
+  status         String
+  submittedAt    DateTime? @map("submitted_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  counsellor     User?     @relation("ApplicationCounsellor", fields: [counsellorId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([counsellorId])
@@ -1025,18 +1232,18 @@ model Application {
 }
 
 model Student {
-  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  studentCode    String   @unique @map("student_code")
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentCode    String    @unique @map("student_code")
   name           String
   destination    String?
   program        String?
-  counsellorName String?  @map("counsellor_name")
-  counsellorId   String?  @map("counsellor_id") @db.Uuid
+  counsellorName String?   @map("counsellor_name")
+  counsellorId   String?   @map("counsellor_id") @db.Uuid
   status         String
   enrolledAt     DateTime? @map("enrolled_at")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at")
-  counsellor     User?    @relation("StudentCounsellor", fields: [counsellorId], references: [id], onDelete: SetNull)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  counsellor     User?     @relation("StudentCounsellor", fields: [counsellorId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([counsellorId])
@@ -1060,56 +1267,41 @@ model CrmDocument {
   @@map("crm_documents")
 }
 
-model Payment {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  invoice   String   @unique
-  payerName String   @map("payer_name")
-  type      String
-  amount    String
-  method    String?
-  status    String
-  paidAt    DateTime? @map("paid_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
-
-  @@index([status])
-  @@index([createdAt])
-  @@map("payments")
-}
-
 model FollowUp {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  contactName      String    @map("contact_name")
-  leadId           String?   @map("lead_id") @db.Uuid
-  type             String
-  ownerName        String?   @map("owner_name")
-  ownerId          String?   @map("owner_id") @db.Uuid
-  dueAt            DateTime? @map("due_at")
-  priority         String?
-  status           String
-  purpose          String?
-  purposeOther     String?   @map("purpose_other")
-  notes            String?   @db.Text
-  nextAction       String?   @map("next_action") @db.Text
-  reminder         String?
-  reminderAt       DateTime? @map("reminder_at")
-  reminderStatus   String?   @default("Pending") @map("reminder_status")
-  outcome          String?
-  completedAt      DateTime? @map("completed_at")
-  completedById    String?   @map("completed_by_id") @db.Uuid
-  completedByName  String?   @map("completed_by_name")
-  cancelledAt      DateTime? @map("cancelled_at")
-  cancelledById    String?   @map("cancelled_by_id") @db.Uuid
-  cancelledByName  String?   @map("cancelled_by_name")
-  cancelReason     String?   @map("cancel_reason") @db.Text
-  source           String?   @default("Manual")
-  sourceReason     String?   @map("source_reason")
-  scheduleHistory  Json?     @map("schedule_history")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at")
-  owner            User?     @relation("FollowUpOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  lead             Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  notifications    Notification[]
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contactName     String         @map("contact_name")
+  leadId          String?        @map("lead_id") @db.Uuid
+  type            String
+  ownerName       String?        @map("owner_name")
+  ownerId         String?        @map("owner_id") @db.Uuid
+  dueAt           DateTime?      @map("due_at")
+  priority        String?
+  status          String
+  purpose         String?
+  purposeOther    String?        @map("purpose_other")
+  notes           String?        @db.Text
+  nextAction      String?        @map("next_action") @db.Text
+  reminder           String?
+  reminderAt         DateTime?      @map("reminder_at")
+  reminderStatus     String?        @default("Pending") @map("reminder_status")
+  dueNotifiedAt      DateTime?      @map("due_notified_at")
+  overdueNotifiedAt  DateTime?      @map("overdue_notified_at")
+  outcome         String?
+  completedAt     DateTime?      @map("completed_at")
+  completedById   String?        @map("completed_by_id") @db.Uuid
+  completedByName String?        @map("completed_by_name")
+  cancelledAt     DateTime?      @map("cancelled_at")
+  cancelledById   String?        @map("cancelled_by_id") @db.Uuid
+  cancelledByName String?        @map("cancelled_by_name")
+  cancelReason    String?        @map("cancel_reason") @db.Text
+  source          String?        @default("Manual")
+  sourceReason    String?        @map("source_reason")
+  scheduleHistory Json?          @map("schedule_history")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @default(now()) @updatedAt @map("updated_at")
+  owner           User?          @relation("FollowUpOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  lead            Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  notifications   Notification[]
 
   @@index([status])
   @@index([ownerId])
@@ -1121,28 +1313,95 @@ model FollowUp {
 }
 
 model Notification {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId      String    @map("user_id") @db.Uuid
-  title       String
-  body        String?   @db.Text
-  link        String?
-  channel     String    @default("in_app")
-  status      String    @default("Unread")
-  type        String?
-  dedupeKey   String?   @unique @map("dedupe_key")
-  leadId      String?   @map("lead_id") @db.Uuid
-  followUpId  String?   @map("follow_up_id") @db.Uuid
-  expiresAt   DateTime? @map("expires_at")
-  readAt      DateTime? @map("read_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
-  user        User      @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
-  lead        Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  followUp    FollowUp? @relation(fields: [followUpId], references: [id], onDelete: SetNull)
+  id             String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String                 @map("user_id") @db.Uuid
+  title          String
+  body           String?                @db.Text
+  link           String?
+  channel        String                 @default("in_app")
+  status         String                 @default("Unread")
+  type           String?
+  eventType      String?                @map("event_type")
+  kind           String                 @default("system")
+  priority       String                 @default("Normal")
+  dedupeKey      String?                @unique @map("dedupe_key")
+  leadId         String?                @map("lead_id") @db.Uuid
+  followUpId     String?                @map("follow_up_id") @db.Uuid
+  scheduledAt    DateTime?              @map("scheduled_at")
+  sentAt         DateTime?              @map("sent_at")
+  deliveryStatus String                 @default("Sent") @map("delivery_status")
+  expiresAt      DateTime?              @map("expires_at")
+  readAt         DateTime?              @map("read_at")
+  archivedAt     DateTime?              @map("archived_at")
+  payload        Json?
+  actions        Json?
+  createdAt      DateTime               @default(now()) @map("created_at")
+  updatedAt      DateTime               @default(now()) @updatedAt @map("updated_at")
+  user           User                   @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  lead           Lead?                  @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  followUp       FollowUp?              @relation(fields: [followUpId], references: [id], onDelete: SetNull)
+  deliveries     NotificationDelivery[]
 
   @@index([userId, status])
+  @@index([userId, eventType])
+  @@index([leadId])
+  @@index([priority])
   @@index([createdAt])
   @@map("notifications")
+}
+
+model NotificationEventConfig {
+  eventType           String   @id @map("event_type")
+  label               String
+  description         String?  @db.Text
+  enabled             Boolean  @default(true)
+  mandatory           Boolean  @default(false)
+  priority            String   @default("Normal")
+  inApp               Boolean  @default(true) @map("in_app")
+  email               Boolean  @default(false)
+  whatsapp            Boolean  @default(false)
+  browser             Boolean  @default(false)
+  recipientRule       String   @default("owner") @map("recipient_rule")
+  notifyPreviousOwner Boolean  @default(false) @map("notify_previous_owner")
+  overdueAfterMinutes Int      @default(60) @map("overdue_after_minutes")
+  statusAllowlist     Json?    @map("status_allowlist")
+  updatedById         String?  @map("updated_by_id") @db.Uuid
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  updatedBy           User?    @relation("NotificationConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("notification_event_configs")
+}
+
+model NotificationPreference {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  eventType String  @map("event_type")
+  inApp     Boolean @default(true) @map("in_app")
+  email     Boolean @default(false)
+  whatsapp  Boolean @default(false)
+  browser   Boolean @default(false)
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventType])
+  @@index([userId])
+  @@map("notification_preferences")
+}
+
+model NotificationDelivery {
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  notificationId String       @map("notification_id") @db.Uuid
+  channel        String
+  status         String       @default("Pending")
+  attempts       Int          @default(0)
+  lastError      String?      @map("last_error") @db.Text
+  sentAt         DateTime?    @map("sent_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@index([notificationId])
+  @@index([status])
+  @@map("notification_deliveries")
 }
 
 enum CommunicationChannel {
@@ -1175,27 +1434,27 @@ enum AttributionChangeKind {
 }
 
 model Campaign {
-  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code        String         @unique
+  id          String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String               @unique
   name        String
-  description String?        @db.Text
-  sourceCode  String?        @map("source_code")
+  description String?              @db.Text
+  sourceCode  String?              @map("source_code")
   channel     String?
-  status      CampaignStatus @default(ACTIVE)
-  startDate   DateTime?      @map("start_date") @db.Date
-  endDate     DateTime?      @map("end_date") @db.Date
+  status      CampaignStatus       @default(ACTIVE)
+  startDate   DateTime?            @map("start_date") @db.Date
+  endDate     DateTime?            @map("end_date") @db.Date
   budget      Float?
-  utmSource   String?        @map("utm_source")
-  utmMedium   String?        @map("utm_medium")
-  utmCampaign String?        @map("utm_campaign")
-  createdById String?        @map("created_by_id") @db.Uuid
-  updatedById String?        @map("updated_by_id") @db.Uuid
-  createdAt   DateTime       @default(now()) @map("created_at")
-  updatedAt   DateTime       @default(now()) @updatedAt @map("updated_at")
-  createdBy   User?          @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy   User?          @relation("CampaignUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  utmSource   String?              @map("utm_source")
+  utmMedium   String?              @map("utm_medium")
+  utmCampaign String?              @map("utm_campaign")
+  createdById String?              @map("created_by_id") @db.Uuid
+  updatedById String?              @map("updated_by_id") @db.Uuid
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @default(now()) @updatedAt @map("updated_at")
+  createdBy   User?                @relation("CampaignCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy   User?                @relation("CampaignUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   leads       Lead[]
-  latestLeads Lead[]             @relation("LeadLatestCampaign")
+  latestLeads Lead[]               @relation("LeadLatestCampaign")
   events      CommunicationEvent[]
   metaLeads   MetaLead[]
   touches     LeadCampaignTouch[]
@@ -1207,48 +1466,48 @@ model Campaign {
 }
 
 model CommunicationEvent {
-  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  channel               CommunicationChannel
-  eventAt               DateTime              @default(now()) @map("event_at")
-  senderName            String?               @map("sender_name")
-  senderPhone           String?               @map("sender_phone")
-  senderPhoneNormalized String?               @map("sender_phone_normalized")
-  senderEmail           String?               @map("sender_email")
-  preferredCountryCode  String?               @map("preferred_country_code")
-  subject               String?
-  message               String?               @db.Text
-  sourceCode            String?               @map("source_code")
-  campaignName          String?               @map("campaign_name")
-  campaignId            String?               @map("campaign_id") @db.Uuid
-  channelCode           String?               @map("channel_code")
-  utmSource             String?               @map("utm_source")
-  utmMedium             String?               @map("utm_medium")
-  utmCampaign           String?               @map("utm_campaign")
-  utmContent            String?               @map("utm_content")
-  utmTerm               String?               @map("utm_term")
-  landingPageUrl        String?               @map("landing_page_url") @db.Text
-  phoneCountryCode      String?               @map("phone_country_code")
-  whatsapp              String?               @map("whatsapp")
-  whatsappSameAsPhone   Boolean?              @map("whatsapp_same_as_phone")
-  currentLocation       String?               @map("current_location")
-  highestQualificationCode String?            @map("highest_qualification_code")
-  preferredIntakeCode   String?               @map("preferred_intake_code")
-  preferredDegreeCode   String?               @map("preferred_degree_code")
-  direction             String                @default("incoming")
-  externalId            String?               @map("external_id")
-  formName              String?               @map("form_name")
-  rawPayload            Json?                 @map("raw_payload")
-  processingStatus      CommunicationStatus   @default(PENDING) @map("processing_status")
-  processingError       String?               @map("processing_error") @db.Text
-  leadId                String?               @map("lead_id") @db.Uuid
-  leadCreated           Boolean               @default(false) @map("lead_created")
-  activityId            String?               @map("activity_id") @db.Uuid
-  processedAt           DateTime?             @map("processed_at")
-  createdAt             DateTime              @default(now()) @map("created_at")
-  updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at")
-  lead                  Lead?                 @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  campaign              Campaign?             @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  metaLead              MetaLead?
+  id                       String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channel                  CommunicationChannel
+  eventAt                  DateTime             @default(now()) @map("event_at")
+  senderName               String?              @map("sender_name")
+  senderPhone              String?              @map("sender_phone")
+  senderPhoneNormalized    String?              @map("sender_phone_normalized")
+  senderEmail              String?              @map("sender_email")
+  preferredCountryCode     String?              @map("preferred_country_code")
+  subject                  String?
+  message                  String?              @db.Text
+  sourceCode               String?              @map("source_code")
+  campaignName             String?              @map("campaign_name")
+  campaignId               String?              @map("campaign_id") @db.Uuid
+  channelCode              String?              @map("channel_code")
+  utmSource                String?              @map("utm_source")
+  utmMedium                String?              @map("utm_medium")
+  utmCampaign              String?              @map("utm_campaign")
+  utmContent               String?              @map("utm_content")
+  utmTerm                  String?              @map("utm_term")
+  landingPageUrl           String?              @map("landing_page_url") @db.Text
+  phoneCountryCode         String?              @map("phone_country_code")
+  whatsapp                 String?              @map("whatsapp")
+  whatsappSameAsPhone      Boolean?             @map("whatsapp_same_as_phone")
+  currentLocation          String?              @map("current_location")
+  highestQualificationCode String?              @map("highest_qualification_code")
+  preferredIntakeCode      String?              @map("preferred_intake_code")
+  preferredDegreeCode      String?              @map("preferred_degree_code")
+  direction                String               @default("incoming")
+  externalId               String?              @map("external_id")
+  formName                 String?              @map("form_name")
+  rawPayload               Json?                @map("raw_payload")
+  processingStatus         CommunicationStatus  @default(PENDING) @map("processing_status")
+  processingError          String?              @map("processing_error") @db.Text
+  leadId                   String?              @map("lead_id") @db.Uuid
+  leadCreated              Boolean              @default(false) @map("lead_created")
+  activityId               String?              @map("activity_id") @db.Uuid
+  processedAt              DateTime?            @map("processed_at")
+  createdAt                DateTime             @default(now()) @map("created_at")
+  updatedAt                DateTime             @default(now()) @updatedAt @map("updated_at")
+  lead                     Lead?                @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  campaign                 Campaign?            @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  metaLead                 MetaLead?
 
   @@unique([channel, externalId])
   @@index([processingStatus])
@@ -1276,38 +1535,38 @@ enum MetaFormType {
 }
 
 model MetaLead {
-  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  platform              MetaPlatform
-  formType              MetaFormType        @default(STUDY_ABROAD) @map("form_type")
-  externalId            String?             @map("external_id")
-  fullName              String?             @map("full_name")
-  phone                 String?
-  phoneNormalized       String?             @map("phone_normalized")
-  email                 String?
-  whatsapp              String?
-  currentEducation      String?             @map("current_education")
-  preferredCountryCode  String?             @map("preferred_country_code")
-  preferredIntake       String?             @map("preferred_intake")
-  campaignName          String?             @map("campaign_name")
-  metaCampaignId        String?             @map("meta_campaign_id")
-  adSetName             String?             @map("ad_set_name")
-  adName                String?             @map("ad_name")
-  campaignId            String?             @map("campaign_id") @db.Uuid
-  receivedAt            DateTime            @default(now()) @map("received_at")
-  processingStatus      CommunicationStatus @default(PENDING) @map("processing_status")
-  processingError       String?             @map("processing_error") @db.Text
-  message               String?
-  duplicate             Boolean             @default(false)
-  pooled                Boolean             @default(false)
-  leadId                String?             @map("lead_id") @db.Uuid
-  communicationEventId  String?             @unique @map("communication_event_id") @db.Uuid
-  rawPayload            Json?               @map("raw_payload")
-  createdAt             DateTime            @default(now()) @map("created_at")
-  updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at")
-  lead                  Lead?               @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  campaign              Campaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  communicationEvent    CommunicationEvent? @relation(fields: [communicationEventId], references: [id], onDelete: SetNull)
-  campaignTouch         LeadCampaignTouch?
+  id                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform             MetaPlatform
+  formType             MetaFormType        @default(STUDY_ABROAD) @map("form_type")
+  externalId           String?             @map("external_id")
+  fullName             String?             @map("full_name")
+  phone                String?
+  phoneNormalized      String?             @map("phone_normalized")
+  email                String?
+  whatsapp             String?
+  currentEducation     String?             @map("current_education")
+  preferredCountryCode String?             @map("preferred_country_code")
+  preferredIntake      String?             @map("preferred_intake")
+  campaignName         String?             @map("campaign_name")
+  metaCampaignId       String?             @map("meta_campaign_id")
+  adSetName            String?             @map("ad_set_name")
+  adName               String?             @map("ad_name")
+  campaignId           String?             @map("campaign_id") @db.Uuid
+  receivedAt           DateTime            @default(now()) @map("received_at")
+  processingStatus     CommunicationStatus @default(PENDING) @map("processing_status")
+  processingError      String?             @map("processing_error") @db.Text
+  message              String?
+  duplicate            Boolean             @default(false)
+  pooled               Boolean             @default(false)
+  leadId               String?             @map("lead_id") @db.Uuid
+  communicationEventId String?             @unique @map("communication_event_id") @db.Uuid
+  rawPayload           Json?               @map("raw_payload")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @default(now()) @updatedAt @map("updated_at")
+  lead                 Lead?               @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  campaign             Campaign?           @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  communicationEvent   CommunicationEvent? @relation(fields: [communicationEventId], references: [id], onDelete: SetNull)
+  campaignTouch        LeadCampaignTouch?
 
   @@unique([platform, externalId])
   @@index([processingStatus])
@@ -1322,29 +1581,29 @@ model MetaLead {
 
 /// Append-only campaign attribution. Rows are never deleted.
 model LeadCampaignTouch {
-  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  leadId         String         @map("lead_id") @db.Uuid
-  metaLeadId     String?        @unique @map("meta_lead_id") @db.Uuid
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId         String        @map("lead_id") @db.Uuid
+  metaLeadId     String?       @unique @map("meta_lead_id") @db.Uuid
   platform       MetaPlatform?
-  formType       MetaFormType?  @map("form_type")
-  campaignName   String?        @map("campaign_name")
-  metaCampaignId String?        @map("meta_campaign_id")
-  adSetName      String?        @map("ad_set_name")
-  adName         String?        @map("ad_name")
-  sourceCode     String?        @map("source_code")
-  channelCode    String?        @map("channel_code")
-  campaignId     String?        @map("campaign_id") @db.Uuid
-  externalLeadId String?        @map("external_lead_id")
-  utmSource      String?        @map("utm_source")
-  utmMedium      String?        @map("utm_medium")
-  utmCampaign    String?        @map("utm_campaign")
-  utmContent     String?        @map("utm_content")
-  utmTerm        String?        @map("utm_term")
-  receivedAt     DateTime       @map("received_at")
-  createdAt      DateTime       @default(now()) @map("created_at")
-  lead           Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  metaLead       MetaLead?      @relation(fields: [metaLeadId], references: [id], onDelete: SetNull)
-  campaign       Campaign?      @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  formType       MetaFormType? @map("form_type")
+  campaignName   String?       @map("campaign_name")
+  metaCampaignId String?       @map("meta_campaign_id")
+  adSetName      String?       @map("ad_set_name")
+  adName         String?       @map("ad_name")
+  sourceCode     String?       @map("source_code")
+  channelCode    String?       @map("channel_code")
+  campaignId     String?       @map("campaign_id") @db.Uuid
+  externalLeadId String?       @map("external_lead_id")
+  utmSource      String?       @map("utm_source")
+  utmMedium      String?       @map("utm_medium")
+  utmCampaign    String?       @map("utm_campaign")
+  utmContent     String?       @map("utm_content")
+  utmTerm        String?       @map("utm_term")
+  receivedAt     DateTime      @map("received_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  lead           Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  metaLead       MetaLead?     @relation(fields: [metaLeadId], references: [id], onDelete: SetNull)
+  campaign       Campaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
   @@index([leadId, receivedAt])
   @@index([campaignName])
@@ -1449,24 +1708,24 @@ enum EmailThreadStatus {
 }
 
 model EmailThread {
-  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  participantEmail       String            @unique @map("participant_email")
-  contactName            String?           @map("contact_name")
-  subject                String?
-  leadId                 String?           @map("lead_id") @db.Uuid
-  assignedUserId         String?           @map("assigned_user_id") @db.Uuid
-  status                 EmailThreadStatus @default(NEW)
-  unreadCount            Int               @default(0) @map("unread_count")
-  lastMessageAt          DateTime?         @map("last_message_at")
-  lastMessagePreview     String?           @map("last_message_preview") @db.Text
-  lastDirection          String?           @map("last_direction")
-  lastInboundMessageId   String?           @map("last_inbound_message_id")
-  linkingAt              DateTime?         @map("linking_at")
-  createdAt              DateTime          @default(now()) @map("created_at")
-  updatedAt              DateTime          @default(now()) @updatedAt @map("updated_at")
-  lead                   Lead?             @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  assignedUser           User?             @relation("EmailThreadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  messages               EmailMessage[]
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  participantEmail     String            @unique @map("participant_email")
+  contactName          String?           @map("contact_name")
+  subject              String?
+  leadId               String?           @map("lead_id") @db.Uuid
+  assignedUserId       String?           @map("assigned_user_id") @db.Uuid
+  status               EmailThreadStatus @default(NEW)
+  unreadCount          Int               @default(0) @map("unread_count")
+  lastMessageAt        DateTime?         @map("last_message_at")
+  lastMessagePreview   String?           @map("last_message_preview") @db.Text
+  lastDirection        String?           @map("last_direction")
+  lastInboundMessageId String?           @map("last_inbound_message_id")
+  linkingAt            DateTime?         @map("linking_at")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @default(now()) @updatedAt @map("updated_at")
+  lead                 Lead?             @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  assignedUser         User?             @relation("EmailThreadAssignee", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages             EmailMessage[]
 
   @@index([leadId])
   @@index([assignedUserId])
@@ -1530,4 +1789,262 @@ model EmailTemplate {
 
   @@index([isActive, sortOrder])
   @@map("email_templates")
+}
+
+enum CrmFileStatus {
+  OPEN
+
+  @@map("crm_file_status")
+}
+
+enum FileDocumentReadiness {
+  INCOMPLETE
+  COMPLETE
+
+  @@map("file_document_readiness")
+}
+
+enum FileDocumentStatus {
+  NOT_REQUESTED
+  REQUESTED
+  RECEIVED
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  REUPLOAD_REQUIRED
+  ARCHIVED
+
+  @@map("file_document_status")
+}
+
+enum FileDocumentRequirement {
+  REQUIRED
+  OPTIONAL
+
+  @@map("file_document_requirement")
+}
+
+enum FileUploadActorKind {
+  EMPLOYEE
+  STUDENT_PORTAL
+
+  @@map("file_upload_actor_kind")
+}
+
+enum FileDocumentRequestMethod {
+  WHATSAPP
+  EMAIL
+  PHONE
+  IN_PERSON
+  OTHER
+
+  @@map("file_document_request_method")
+}
+
+enum FileDocumentRequestStatus {
+  OPEN
+  FULFILLED
+  CANCELLED
+
+  @@map("file_document_request_status")
+}
+
+enum FileDocumentActivityAction {
+  REQUESTED
+  UPLOADED
+  REVIEW_STARTED
+  VERIFIED
+  REJECTED
+  REUPLOADED
+  ARCHIVED
+  PRIMARY_MARKED
+  CHECKLIST_ADDED
+  CHECKLIST_REMOVED
+  CHECKLIST_UPDATED
+  VIEWED
+  DOWNLOADED
+
+  @@map("file_document_activity_action")
+}
+
+/// CRM-009 file opened after lead conversion. Document completion is separate from file status.
+model CrmFile {
+  id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code              String                @unique
+  leadId            String                @unique @map("lead_id") @db.Uuid
+  studentName       String                @map("student_name")
+  ownerId           String?               @map("owner_id") @db.Uuid
+  status            CrmFileStatus         @default(OPEN)
+  documentReadiness FileDocumentReadiness @default(INCOMPLETE) @map("document_readiness")
+  openedById        String?               @map("opened_by_id") @db.Uuid
+  openedAt          DateTime              @default(now()) @map("opened_at")
+  createdAt         DateTime              @default(now()) @map("created_at")
+  updatedAt         DateTime              @default(now()) @updatedAt @map("updated_at")
+  lead              Lead                  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  owner             User?                 @relation("CrmFileOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  openedBy          User?                 @relation("CrmFileOpenedBy", fields: [openedById], references: [id], onDelete: SetNull)
+  checklistItems    FileChecklistItem[]
+  documents         FileDocument[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([documentReadiness])
+  @@map("crm_files")
+}
+
+model FileChecklistItem {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fileId       String        @map("file_id") @db.Uuid
+  categoryCode String        @map("category_code")
+  categoryName String        @map("category_name")
+  typeCode     String        @map("type_code")
+  typeName     String        @map("type_name")
+  isRequired   Boolean       @default(true) @map("is_required")
+  isActive     Boolean       @default(true) @map("is_active")
+  sortOrder    Int           @default(0) @map("sort_order")
+  addedById    String?       @map("added_by_id") @db.Uuid
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @default(now()) @updatedAt @map("updated_at")
+  file         CrmFile       @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  addedBy      User?         @relation("FileChecklistAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+  document     FileDocument?
+
+  @@unique([fileId, typeCode])
+  @@index([fileId, isActive, sortOrder])
+  @@map("file_checklist_items")
+}
+
+model FileDocument {
+  id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                 String                   @unique
+  fileId               String                   @map("file_id") @db.Uuid
+  checklistItemId      String?                  @unique @map("checklist_item_id") @db.Uuid
+  categoryCode         String                   @map("category_code")
+  categoryNameSnapshot String                   @map("category_name_snapshot")
+  typeCode             String                   @map("type_code")
+  typeNameSnapshot     String                   @map("type_name_snapshot")
+  requirement          FileDocumentRequirement?
+  status               FileDocumentStatus       @default(NOT_REQUESTED)
+  archivedAt           DateTime?                @map("archived_at")
+  createdAt            DateTime                 @default(now()) @map("created_at")
+  updatedAt            DateTime                 @default(now()) @updatedAt @map("updated_at")
+  file                 CrmFile                  @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  checklistItem        FileChecklistItem?       @relation(fields: [checklistItemId], references: [id], onDelete: SetNull)
+  versions             FileDocumentVersion[]
+  requests             FileDocumentRequest[]
+  activities           FileDocumentActivity[]
+
+  @@index([fileId, typeCode])
+  @@index([fileId, status])
+  @@index([status])
+  @@index([archivedAt])
+  @@map("file_documents")
+}
+
+model FileDocumentVersion {
+  id                  String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId          String              @map("document_id") @db.Uuid
+  versionNumber       Int                 @map("version_number")
+  isLatest            Boolean             @default(true) @map("is_latest")
+  documentDate        DateTime?           @map("document_date") @db.Date
+  expiryDate          DateTime?           @map("expiry_date") @db.Date
+  remarks             String?             @db.Text
+  rejectionReasonCode String?             @map("rejection_reason_code")
+  rejectionReasonName String?             @map("rejection_reason_name")
+  rejectionRemarks    String?             @map("rejection_remarks") @db.Text
+  verifiedById        String?             @map("verified_by_id") @db.Uuid
+  verifiedAt          DateTime?           @map("verified_at")
+  verificationRemarks String?             @map("verification_remarks") @db.Text
+  uploadedById        String?             @map("uploaded_by_id") @db.Uuid
+  uploadedByKind      FileUploadActorKind @default(EMPLOYEE) @map("uploaded_by_kind")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  document            FileDocument        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy          User?               @relation("FileDocumentVersionUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  verifiedBy          User?               @relation("FileDocumentVersionVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+  assets              FileDocumentAsset[]
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId, isLatest])
+  @@index([expiryDate])
+  @@index([uploadedById])
+  @@index([verifiedById])
+  @@map("file_document_versions")
+}
+
+model FileDocumentAsset {
+  id         String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionId  String              @map("version_id") @db.Uuid
+  fileName   String              @map("file_name")
+  label      String?
+  mimeType   String              @map("mime_type")
+  storageKey String              @map("storage_key")
+  fileSize   Int                 @map("file_size")
+  isPrimary  Boolean             @default(false) @map("is_primary")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  version    FileDocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId, isPrimary])
+  @@map("file_document_assets")
+}
+
+model FileDocumentRequest {
+  id                   String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                 String                    @unique
+  documentId           String                    @map("document_id") @db.Uuid
+  requestedById        String?                   @map("requested_by_id") @db.Uuid
+  dueDate              DateTime?                 @map("due_date") @db.Date
+  method               FileDocumentRequestMethod
+  remarks              String?                   @db.Text
+  status               FileDocumentRequestStatus @default(OPEN)
+  activityId           String?                   @map("activity_id") @db.Uuid
+  communicationEventId String?                   @map("communication_event_id") @db.Uuid
+  createdAt            DateTime                  @default(now()) @map("created_at")
+  document             FileDocument              @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  requestedBy          User?                     @relation("FileDocumentRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+  @@index([requestedById])
+  @@index([dueDate])
+  @@map("file_document_requests")
+}
+
+model PerformanceKpi {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key            String   @unique
+  name           String
+  target         Decimal  @db.Decimal(14, 2)
+  unit           String   @default("percent")
+  higherIsBetter Boolean  @default(true) @map("higher_is_better")
+  weight         Int      @default(0)
+  isActive       Boolean  @default(true) @map("is_active")
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("performance_kpis")
+}
+
+model PerformanceSetting {
+  id                  String   @id @default("default")
+  overallScoreEnabled Boolean  @default(true) @map("overall_score_enabled")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  updatedById         String?  @map("updated_by_id") @db.Uuid
+
+  @@map("performance_settings")
+}
+
+model FileDocumentActivity {
+  id         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String                     @map("document_id") @db.Uuid
+  action     FileDocumentActivityAction
+  notes      String?                    @db.Text
+  metadata   Json?
+  userId     String?                    @map("user_id") @db.Uuid
+  createdAt  DateTime                   @default(now()) @map("created_at")
+  document   FileDocument               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User?                      @relation("FileDocumentActivityActor", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+  @@index([userId])
+  @@map("file_document_activities")
 }

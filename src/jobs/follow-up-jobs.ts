@@ -1,8 +1,8 @@
 import { syncOverdueFollowUps } from './overdue-follow-ups'
-import { dispatchDueReminders } from '../modules/notifications/notifications.service'
+import { dispatchDueReminders } from '../modules/notifications/notifications.scheduler'
 
 /** Combined follow-up maintenance: overdue status + reminder notifications. */
-export function startFollowUpJobs(intervalMs = 2 * 60 * 1000) {
+export function startFollowUpJobs(intervalMs = 60 * 1000) {
   let running = false
 
   const tick = async () => {

@@ -16,7 +16,7 @@ import {
   userDirectoryScope,
 } from "../auth/access";
 import { normalizeEmail, normalizeUsername } from "../auth/identifier";
-import { hashPassword } from "../auth/password";
+import { hashPassword, verifyPassword } from "../auth/password";
 import { sendAccountInvite } from "../auth/password-reset.service";
 import type { AuthContext } from "../auth/session.service";
 import { revokeSession, revokeUserSessions } from "../auth/session.service";
@@ -1011,4 +1011,100 @@ export async function listUserActivity(auth: AuthContext, userId: string) {
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+}
+
+export async function adminChangeUserPassword(
+  auth: AuthContext,
+  userId: string,
+  input: {
+    currentPassword: unknown;
+    newPassword: unknown;
+    confirmPassword: unknown;
+  },
+  meta: { ipAddress?: string; userAgent?: string },
+) {
+  await assertCanViewUser(auth, userId);
+
+  const currentPassword =
+    typeof input.currentPassword === "string" ? input.currentPassword : "";
+  const newPassword =
+    typeof input.newPassword === "string" ? input.newPassword : "";
+  const confirmPassword =
+    typeof input.confirmPassword === "string" ? input.confirmPassword : "";
+
+  if (!currentPassword) {
+    throw httpError.badRequest("Current password is required.");
+  }
+  if (newPassword.length < config.minPasswordLength) {
+    throw httpError.badRequest(
+      `Password must be at least ${config.minPasswordLength} characters.`,
+    );
+  }
+  if (newPassword !== confirmPassword) {
+    throw httpError.badRequest("New password and confirmation do not match.");
+  }
+
+  const actor = await prisma.user.findUniqueOrThrow({
+    where: { id: auth.user.id },
+  });
+  const actorMatches = await verifyPassword(actor.passwordHash, currentPassword);
+  if (!actorMatches) {
+    throw httpError.badRequest(
+      "Current password is incorrect.",
+      "INVALID_PASSWORD",
+    );
+  }
+
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (target.status === "SUSPENDED") {
+    throw httpError.badRequest(
+      "Suspended users cannot have their password changed until they are reactivated.",
+    );
+  }
+
+  const activatingInvite = target.status === "INVITED";
+  const passwordHash = await hashPassword(newPassword);
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        ...(activatingInvite ? { status: "ACTIVE" as const } : {}),
+      },
+    }),
+    prisma.passwordResetToken.updateMany({
+      where: { userId, usedAt: null },
+      data: { usedAt: new Date() },
+    }),
+    prisma.session.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+        ...(userId === auth.user.id && auth.sessionId
+          ? { id: { not: auth.sessionId } }
+          : {}),
+      },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
+
+  await writeAuditLog({
+    userId: auth.user.id,
+    action: "USER_PASSWORD_CHANGED",
+    entityType: "user",
+    entityId: userId,
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+    metadata: { activatedInvite: activatingInvite },
+  });
+
+  return {
+    message: activatingInvite
+      ? "Password set. The account is now Active."
+      : "Password updated.",
+    activated: activatingInvite,
+  };
 }

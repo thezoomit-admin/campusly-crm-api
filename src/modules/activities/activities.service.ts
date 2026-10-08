@@ -246,7 +246,23 @@ function offerAuditDetails(
   if (action === "SERVICE_OFFER_UPDATED")
     return `${version} updated · BDT ${stringify(metadata?.previousFinalPayable)} → BDT ${amount}`;
   if (action === "SERVICE_OFFER_PAYMENT_RECORDED") {
-    return `${version}: payment ${stringify(metadata?.installmentSequence)} received · BDT ${stringify(metadata?.amount)}`;
+    const receipt = metadata?.receiptNumber
+      ? ` · Receipt: ${stringify(metadata.receiptNumber)}`
+      : "";
+    const due =
+      metadata?.remainingDue != null
+        ? ` · Remaining Due: BDT ${stringify(metadata.remainingDue)}`
+        : "";
+    return `Payment Received — Amount: BDT ${stringify(metadata?.amount)} — Method: ${stringify(metadata?.method)}${receipt}${due}`;
+  }
+  if (action === "SERVICE_OFFER_PAYMENT_COMPLETED") {
+    return `${version}: Payment Completed`;
+  }
+  if (action === "SERVICE_OFFER_PAYMENT_CANCELLED") {
+    return `Payment Cancelled — ${stringify(metadata?.paymentNumber)} · BDT ${stringify(metadata?.amount)}`;
+  }
+  if (action === "SERVICE_OFFER_PAYMENT_REVERSED") {
+    return `Payment Reversed — ${stringify(metadata?.paymentNumber)} · BDT ${stringify(metadata?.amount)}`;
   }
   if (action === "SERVICE_OFFER_DELETED") return `${version} draft deleted`;
   return `${humanize(action)} · ${version}`;
@@ -257,7 +273,7 @@ function classifyAudit(
   entityType: string | null,
 ): FeedCategory {
   if (isOfferAction(action))
-    return action === "SERVICE_OFFER_PAYMENT_RECORDED"
+    return action.startsWith("SERVICE_OFFER_PAYMENT_")
       ? "payment"
       : "counselling";
   const text = `${action} ${entityType || ""}`.toLowerCase();
