@@ -84,7 +84,15 @@ function activePipelineLeadsWhere(): Prisma.LeadWhereInput {
 type AuditMeta = { ipAddress?: string; userAgent?: string };
 
 const leadInclude = {
-  owner: { select: { id: true, fullName: true, teamId: true, photoUrl: true, updatedAt: true } },
+  owner: {
+    select: {
+      id: true,
+      fullName: true,
+      teamId: true,
+      photoUrl: true,
+      updatedAt: true,
+    },
+  },
   assignedCountryTeam: { select: { id: true, name: true, key: true } },
   createdBy: { select: { id: true, fullName: true } },
   updatedBy: { select: { id: true, fullName: true } },
@@ -228,7 +236,10 @@ function serializeLead(
       ? {
           id: lead.owner.id,
           name: lead.owner.fullName,
-          photoUrl: versionedUserPhotoUrl(lead.owner.photoUrl, lead.owner.updatedAt),
+          photoUrl: versionedUserPhotoUrl(
+            lead.owner.photoUrl,
+            lead.owner.updatedAt,
+          ),
         }
       : lead.ownerName
         ? { id: lead.ownerId, name: lead.ownerName, photoUrl: null }
@@ -1683,7 +1694,8 @@ export async function updatePriority(
   if (!hasPermission(auth.permissions, "lead:override_priority")) {
     throw httpError.accessDenied();
   }
-  await assertCanViewLead(auth, id);
+  const currentLead = await assertCanViewLead(auth, id);
+  const previousPriority = currentLead.priority || "—";
   const fields: Record<string, string> = {};
   const item = await resolveMasterCode(
     "LEAD_PRIORITY",
@@ -1720,6 +1732,37 @@ export async function updatePriority(
     userAgent: meta.userAgent,
     metadata: { priority: item!.code, reason },
   });
+
+  try {
+    const { dispatchCrmEvent } = await import("../notifications/notifications.service");
+    const nextPriority = item!.name;
+    await dispatchCrmEvent({
+      eventType: "lead_priority_updated",
+      dedupeKey: `lead-priority:${lead.id}:${lead.updatedAt.toISOString()}`,
+      title: "Lead Priority Updated",
+      body: `${lead.name} — Priority: ${previousPriority} → ${nextPriority}`,
+      link: `/leads/${lead.id}`,
+      leadId: lead.id,
+      ownerId: lead.ownerId,
+      payload: { leadName: lead.name, leadCode: lead.code, previousPriority, priority: nextPriority },
+      actions: [{ key: "open_lead", label: "Open Lead", href: `/leads/${lead.id}` }],
+    });
+    if (nextPriority.toLowerCase() === "high" && previousPriority.toLowerCase() !== "high") {
+      await dispatchCrmEvent({
+        eventType: "high_priority_lead",
+        dedupeKey: `high-priority:${lead.id}:${lead.updatedAt.toISOString()}`,
+        title: "High Priority Lead",
+        body: `${lead.name} has been marked as High Priority. Score: ${lead.leadScore ?? 0}`,
+        link: `/leads/${lead.id}`,
+        leadId: lead.id,
+        ownerId: lead.ownerId,
+        payload: { leadName: lead.name, leadCode: lead.code, score: lead.leadScore ?? 0, priority: nextPriority },
+        actions: [{ key: "open_lead", label: "Open Lead", href: `/leads/${lead.id}` }],
+      });
+    }
+  } catch (error) {
+    console.error("[notifications] Priority notification failed:", error);
+  }
 
   return { lead: serializeLead(lead) };
 }
@@ -1867,7 +1910,10 @@ export async function updateLeadStatus(
         const { openCrmFile } = await import("../files/file-documents.service");
         await openCrmFile(auth, id, meta);
       } catch (error) {
-        console.error("[files] File opening after status change failed:", error);
+        console.error(
+          "[files] File opening after status change failed:",
+          error,
+        );
       }
     }
 
@@ -1890,6 +1936,29 @@ export async function updateLeadStatus(
         name: lead.name,
       },
     });
+
+    try {
+      const { dispatchCrmEvent } = await import("../notifications/notifications.service");
+      await dispatchCrmEvent({
+        eventType: "lead_status_updated",
+        dedupeKey: `lead-status:${lead.id}:${current!.code}:${next.code}:${lead.updatedAt.toISOString()}`,
+        title: "Lead Status Updated",
+        body: `${lead.name} — Previous: ${current!.name} — New: ${next.name}`,
+        link: `/leads/${lead.id}`,
+        leadId: lead.id,
+        ownerId: lead.ownerId,
+        statusCode: next.code,
+        payload: {
+          leadName: lead.name,
+          leadCode: lead.code,
+          previousStatus: current!.name,
+          newStatus: next.name,
+        },
+        actions: [{ key: "open_lead", label: "Open Lead", href: `/leads/${lead.id}` }],
+      });
+    } catch (error) {
+      console.error("[notifications] Status notification failed:", error);
+    }
 
     return getLead(auth, id);
   } catch (error) {
@@ -2887,7 +2956,7 @@ export async function assignLead(
   const teamId = assignee.teamId || current.assignedCountryTeamId;
 
   try {
-    const lead = await prisma.$transaction(async (tx) => {
+    const assigned = await prisma.$transaction(async (tx) => {
       const updated = await tx.lead.update({
         where: { id },
         data: {
@@ -2898,7 +2967,7 @@ export async function assignLead(
         },
         include: leadInclude,
       });
-      await tx.leadAssignment.create({
+      const assignment = await tx.leadAssignment.create({
         data: {
           leadId: id,
           fromOwnerId,
@@ -2923,8 +2992,10 @@ export async function assignLead(
           userAgent: meta.userAgent,
         },
       });
-      return updated;
+      return { lead: updated, assignmentId: assignment.id };
     });
+    const lead = assigned.lead;
+    const assignmentId = assigned.assignmentId;
 
     await writeAuditLog({
       userId: auth.user.id,
@@ -2964,16 +3035,34 @@ export async function assignLead(
         actorUserId: auth.user.id,
         meta,
       });
-      const { createNotification } =
-        await import("../notifications/notifications.service");
-      await createNotification({
-        userId: assignee.id,
-        title: isUnassigned ? "New Lead Assigned" : "Lead Reassigned to You",
-        body: `${lead.code} — ${lead.name} is now assigned to you.`,
+      const { dispatchCrmEvent } = await import("../notifications/notifications.service");
+      const when = new Date().toLocaleString("en-US", {
+        timeZone: "Asia/Dhaka",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+      await dispatchCrmEvent({
+        eventType: isUnassigned ? "lead_assigned" : "lead_reassigned",
+        dedupeKey: `lead-assigned:${assignmentId}`,
+        title: isUnassigned ? "New Lead Assigned" : "Lead Reassigned",
+        body: isUnassigned
+          ? `Lead: ${lead.name} — Lead ID: ${lead.code} — Country: ${lead.country || "—"}`
+          : `Lead: ${lead.name} — You are now responsible for this Lead.`,
         link: `/leads/${lead.id}`,
-        type: "lead_assigned",
         leadId: lead.id,
-        dedupeKey: `lead-assigned:${lead.id}:${assignee.id}:${Date.now()}`,
+        ownerId: assignee.id,
+        previousOwnerId: fromOwnerId,
+        payload: {
+          leadName: lead.name,
+          leadCode: lead.code,
+          country: lead.country || null,
+          assignedBy: isUnassigned ? "System" : auth.user.fullName,
+          assignedAt: when,
+        },
+        actions: [{ key: "open_lead", label: "Open Lead", href: `/leads/${lead.id}` }],
       });
     } catch (error) {
       console.error("[follow-ups] Auto follow-up on assign failed:", error);

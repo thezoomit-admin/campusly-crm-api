@@ -18,7 +18,7 @@ import { normalizeEmail, normalizeUsername } from "../auth/identifier";
 import { hashPassword } from "../auth/password";
 import { sendAccountInvite } from "../auth/password-reset.service";
 import type { AuthContext } from "../auth/session.service";
-import { getFollowUpPerformance } from "../pipeline/follow-up-performance.service";
+import { getPerformanceDetail } from "../performance/performance.service";
 import {
   destroyStoredUpload,
   DOCUMENT_FIELD_MAP,
@@ -1610,12 +1610,10 @@ export async function getEmployeePerformanceSummary(
     };
   }
 
-  const performance = await getFollowUpPerformance(auth, {
-    ownerId: employee.userId,
+  const performance = await getPerformanceDetail(auth, employee.userId, {
+    preset: "this_month",
   });
-  const row =
-    performance.employees.find((item) => item.ownerId === employee.userId) ||
-    null;
+  const metrics = performance.metrics;
 
   return {
     employee: {
@@ -1627,23 +1625,14 @@ export async function getEmployeePerformanceSummary(
     available: true,
     from: performance.from,
     to: performance.to,
-    summary: row
-      ? {
-          due: row.due,
-          completed: row.completed,
-          onTime: row.onTime,
-          overdue: row.overdue,
-          completionRate: row.completionRate,
-          onTimeRate: row.onTimeRate,
-        }
-      : {
-          due: 0,
-          completed: 0,
-          onTime: 0,
-          overdue: 0,
-          completionRate: 0,
-          onTimeRate: 0,
-        },
-    row,
+    summary: {
+      due: metrics.followUpsDue,
+      completed: metrics.followUpsCompleted,
+      onTime: metrics.followUpsOnTime,
+      overdue: metrics.followUpsOverdue,
+      completionRate: metrics.followUpCompletionRate,
+      onTimeRate: metrics.followUpOnTimeRate,
+    },
+    row: metrics,
   };
 }

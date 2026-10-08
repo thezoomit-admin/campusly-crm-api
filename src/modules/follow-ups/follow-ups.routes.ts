@@ -5,9 +5,11 @@ import {
   cancelFollowUp,
   completeFollowUp,
   createFollowUp,
+  getFollowUp,
   listFollowUps,
   listLeadFollowUps,
   rescheduleFollowUp,
+  updateFollowUpReminder,
 } from './follow-ups.service'
 
 export const followUpsRouter = Router()
@@ -52,6 +54,22 @@ followUpsRouter.post('/', requirePermission('follow_up:create'), async (req, res
         userAgent: requestUserAgent(req),
       }),
     )
+  } catch (error) {
+    next(error)
+  }
+})
+
+followUpsRouter.get('/:id', requirePermission('follow_up:view'), async (req, res, next) => {
+  try {
+    res.json(await getFollowUp(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
+followUpsRouter.post('/:id/reminder', requirePermission('follow_up:edit'), async (req, res, next) => {
+  try {
+    res.json(await updateFollowUpReminder(req.auth!, routeParam(req.params.id), body(req)))
   } catch (error) {
     next(error)
   }

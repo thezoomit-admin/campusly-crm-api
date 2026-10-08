@@ -26,4 +26,5 @@ export type {
   LeadDocumentActivityAction,
   FileDocumentStatus,
   PaymentTxnStatus,
+  ActivityType,
 } from '../../generated/prisma/index'

@@ -246,7 +246,9 @@ function offerAuditDetails(
   if (action === "SERVICE_OFFER_UPDATED")
     return `${version} updated · BDT ${stringify(metadata?.previousFinalPayable)} → BDT ${amount}`;
   if (action === "SERVICE_OFFER_PAYMENT_RECORDED") {
-    const receipt = metadata?.receiptNumber ? ` · Receipt: ${stringify(metadata.receiptNumber)}` : "";
+    const receipt = metadata?.receiptNumber
+      ? ` · Receipt: ${stringify(metadata.receiptNumber)}`
+      : "";
     const due =
       metadata?.remainingDue != null
         ? ` · Remaining Due: BDT ${stringify(metadata.remainingDue)}`

@@ -31,6 +31,8 @@ export const FOLLOW_UP_PURPOSES = [
 
 export const FOLLOW_UP_REMINDERS = [
   'No Reminder',
+  'At the time',
+  '5 Minutes Before',
   '15 Minutes Before',
   '30 Minutes Before',
   '1 Hour Before',

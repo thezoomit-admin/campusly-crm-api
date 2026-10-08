@@ -492,6 +492,25 @@ export async function openCrmFile(auth: AuthContext, leadId: string, meta?: Audi
     userAgent: meta?.userAgent,
     metadata: { fileCode: file.code, leadId: lead.id, leadCode: lead.code },
   })
+  try {
+    const owner = lead.ownerId
+      ? await prisma.user.findUnique({ where: { id: lead.ownerId }, select: { fullName: true } })
+      : null
+    const { dispatchCrmEvent } = await import('../notifications/notifications.service')
+    await dispatchCrmEvent({
+      eventType: 'file_opened',
+      dedupeKey: `file-opened:${file.id}`,
+      title: 'File Opened',
+      body: `Lead: ${lead.name} — File ID: ${file.code} — Owner: ${owner?.fullName || '—'}`,
+      link: `/leads/${lead.id}`,
+      leadId: lead.id,
+      ownerId: lead.ownerId,
+      payload: { leadName: lead.name, leadCode: lead.code, fileCode: file.code, ownerName: owner?.fullName || null },
+      actions: [{ key: 'open_file', label: 'Open File', href: `/leads/${lead.id}` }],
+    })
+  } catch (error) {
+    console.error('[notifications] File opening notification failed:', error)
+  }
   return file
 }
 

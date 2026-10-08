@@ -2,6 +2,8 @@
 export function reminderOffsetMinutes(reminder: string | null | undefined): number | null {
   const key = (reminder || '').trim().toLowerCase()
   if (!key || key === 'no reminder') return null
+  if (key === 'at the time' || key.includes('at the time')) return 0
+  if (key.startsWith('5 ')) return 5
   if (key.includes('15')) return 15
   if (key.includes('30')) return 30
   if (key.includes('1 hour') || key.includes('1hour')) return 60
