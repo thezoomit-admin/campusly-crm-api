@@ -9,6 +9,7 @@ import {
   resolveLeadStatus,
 } from './lead-status'
 import {
+  displayedLeadScore,
   FOLLOW_UP_CLOSED_STATUSES,
   WORKSPACE_ACCESS_DENIED,
   asString,
@@ -165,13 +166,14 @@ export async function handoverLead(auth: AuthContext, id: string, body: Record<s
   const fromOwnerName = current.ownerName
   const teamId = counsellor.teamId || current.assignedCountryTeamId
   const reason = handoverReason(note, counsellor.fullName)
+  const scored = displayedLeadScore(current)
   const handoverNote: Prisma.InputJsonObject = {
     ...note,
     snapshot: {
       profileCompletion: current.profileCompletion,
-      leadScore: current.leadScore,
-      priority: current.priority,
-      priorityCode: current.priorityCode,
+      leadScore: scored.score,
+      priority: scored.priority,
+      priorityCode: scored.priorityCode,
       qualificationResultCode: current.qualificationResultCode,
     },
   }
@@ -281,8 +283,8 @@ export async function handoverLead(auth: AuthContext, id: string, body: Record<s
         relatedName: lead.name,
         name: lead.name,
         profileCompletion: current.profileCompletion,
-        leadScore: current.leadScore,
-        priority: current.priority,
+        leadScore: scored.score,
+        priority: scored.priority,
         qualificationResultCode: current.qualificationResultCode,
       },
     })

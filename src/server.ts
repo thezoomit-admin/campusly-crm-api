@@ -1,12 +1,16 @@
 import { createServer, type Server } from 'http'
 import app from './app'
 import { config } from './config'
+import { startDocumentExpiryJob } from './jobs/document-expiry'
 import { startEmailInboundSyncJob } from './jobs/email-inbound-sync'
 import { startEmailWaitingReplyJob } from './jobs/email-waiting-reply'
 import { startFollowUpJobs } from './jobs/follow-up-jobs'
 import { startOfferExpiryJob } from './jobs/offer-expiry'
 import { prisma } from './lib/prisma'
 import { ensureLeadAttribution } from './modules/leads/lead-attribution'
+import { syncStoredLeadScores } from './modules/leads/leads.helpers'
+import { ensureDocumentChecklistRules } from './modules/leads/leads.documents'
+import { ensureFileDocumentSetup } from './modules/files/file-documents.service'
 import { initSocket } from './realtime/socket'
 
 const PORT = config.port
@@ -15,6 +19,7 @@ let followUpJobTimer: ReturnType<typeof setInterval> | undefined
 let offerExpiryTimer: ReturnType<typeof setInterval> | undefined
 let emailInboundTimer: ReturnType<typeof setInterval> | undefined
 let emailWaitingReplyTimer: ReturnType<typeof setInterval> | undefined
+let documentExpiryTimer: ReturnType<typeof setInterval> | undefined
 
 const gracefulShutdown = (signal: string) => {
   console.log(`\n🛑 ${signal} received. Starting graceful shutdown...`)
@@ -34,6 +39,10 @@ const gracefulShutdown = (signal: string) => {
   if (emailWaitingReplyTimer) {
     clearInterval(emailWaitingReplyTimer)
     emailWaitingReplyTimer = undefined
+  }
+  if (documentExpiryTimer) {
+    clearInterval(documentExpiryTimer)
+    documentExpiryTimer = undefined
   }
 
   if (server) {
@@ -85,6 +94,19 @@ async function bootstrap() {
     await ensureLeadAttribution().catch((error) => {
       console.error('Lead attribution setup skipped:', error)
     })
+    await ensureDocumentChecklistRules().catch((error) => {
+      console.error('Document checklist setup skipped:', error)
+    })
+    await ensureFileDocumentSetup().catch((error) => {
+      console.error('File document setup skipped:', error)
+    })
+    await syncStoredLeadScores()
+      .then((updated) => {
+        if (updated > 0) console.log(`Lead scores refreshed from profile data (${updated})`)
+      })
+      .catch((error) => {
+        console.error('Lead score refresh skipped:', error)
+      })
 
     server = createServer(app)
     initSocket(server)
@@ -100,6 +122,8 @@ async function bootstrap() {
       offerExpiryTimer = startOfferExpiryJob()
       emailInboundTimer = startEmailInboundSyncJob()
       emailWaitingReplyTimer = startEmailWaitingReplyJob()
+      documentExpiryTimer = startDocumentExpiryJob()
+      console.log('⏱️  Document expiry job started (hourly)')
     })
   } catch (error) {
     console.error('❌ Failed to start server:', error)

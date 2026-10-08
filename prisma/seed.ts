@@ -752,15 +752,12 @@ async function seedPipelineDemo(userIds: string[]) {
     ],
   })
 
-  await prisma.payment.createMany({
+  await prisma.documentSequence.createMany({
     data: [
-      { invoice: 'INV-5012', payerName: 'Ruma Akter', type: 'File Opening', amount: '৳ 15,000', method: 'bKash', status: 'Paid', paidAt: dateOnly('2026-09-20') },
-      { invoice: 'INV-5013', payerName: 'Hasan Mahmud', type: 'Service Charge', amount: '৳ 25,000', method: 'Bank Transfer', status: 'Partial', paidAt: dateOnly('2026-09-18') },
-      { invoice: 'INV-5014', payerName: 'Nusrat Jahan', type: 'Application Fee', amount: '৳ 8,500', method: 'Nagad', status: 'Pending', paidAt: null },
-      { invoice: 'INV-5015', payerName: 'Omar Faruk', type: 'Service Charge', amount: '৳ 30,000', method: 'Cash', status: 'Paid', paidAt: dateOnly('2026-09-12') },
-      { invoice: 'INV-5016', payerName: 'Sabbir Ahmed', type: 'Custom Charge', amount: '৳ 5,000', method: 'Card', status: 'Failed', paidAt: dateOnly('2026-09-10') },
-      { invoice: 'INV-5017', payerName: 'Farzana Kabir', type: 'File Opening', amount: '৳ 15,000', method: 'Online Payment', status: 'Paid', paidAt: dateOnly('2026-09-21') },
+      { key: 'payment', nextValue: 1 },
+      { key: 'receipt', nextValue: 1 },
     ],
+    skipDuplicates: true,
   })
 
   const due = (daysFromNow: number, hour: number) => {

@@ -166,6 +166,8 @@ model User {
   counselledStudents  Student[]              @relation("StudentCounsellor")
   uploadedDocuments   CrmDocument[]          @relation("DocumentUploader")
   uploadedLeadDocuments LeadDocument[]       @relation("LeadDocumentUploader")
+  verifiedLeadDocuments LeadDocument[]       @relation("LeadDocumentVerifier")
+  leadDocumentActivities LeadDocumentActivity[] @relation("LeadDocumentActivityActor")
   authoredLeadNotes   LeadNote[]             @relation("LeadNoteAuthor")
   ownedFollowUps      FollowUp[]             @relation("FollowUpOwner")
   notifications       Notification[]         @relation("NotificationRecipient")
@@ -189,6 +191,18 @@ model User {
   serviceOffersCancelled ServiceOffer[]      @relation("ServiceOfferCancelledBy")
   serviceOfferStatusChanges ServiceOfferStatusHistory[] @relation("ServiceOfferStatusChangedBy")
   serviceOfferPaymentsRecorded ServiceOfferInstallment[] @relation("ServiceOfferInstallmentPaidBy")
+  paymentsReceived             Payment[]                 @relation("PaymentReceivedBy")
+  paymentsCreated              Payment[]                 @relation("PaymentCreatedBy")
+  paymentsCancelled            Payment[]                 @relation("PaymentCancelledBy")
+  paymentsReversed             Payment[]                 @relation("PaymentReversedBy")
+  receiptsGenerated            Receipt[]                 @relation("ReceiptGeneratedBy")
+  ownedCrmFiles                CrmFile[]                 @relation("CrmFileOwner")
+  openedCrmFiles               CrmFile[]                 @relation("CrmFileOpenedBy")
+  fileChecklistItemsAdded      FileChecklistItem[]       @relation("FileChecklistAddedBy")
+  uploadedFileDocumentVersions FileDocumentVersion[]     @relation("FileDocumentVersionUploader")
+  verifiedFileDocumentVersions FileDocumentVersion[]     @relation("FileDocumentVersionVerifier")
+  fileDocumentRequests         FileDocumentRequest[]     @relation("FileDocumentRequester")
+  fileDocumentActivities       FileDocumentActivity[]    @relation("FileDocumentActivityActor")
 
   @@index([primaryRoleId])
   @@index([departmentId])
@@ -538,6 +552,7 @@ model ServiceOffer {
   sourceVersion          PackageVersion?    @relation(fields: [sourcePackageVersionId], references: [id], onDelete: Restrict)
   items                  ServiceOfferItem[]
   installments           ServiceOfferInstallment[]
+  payments               Payment[]
   generatedBy            User?              @relation("ServiceOfferGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
   createdBy              User?              @relation("ServiceOfferCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy              User?              @relation("ServiceOfferUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
@@ -598,22 +613,121 @@ model ServiceOfferItem {
 }
 
 model ServiceOfferInstallment {
-  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  serviceOfferId String       @map("service_offer_id") @db.Uuid
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  serviceOfferId String              @map("service_offer_id") @db.Uuid
   sequence       Int
-  amount         Decimal      @db.Decimal(14, 2)
+  amount         Decimal             @db.Decimal(14, 2)
   purpose        String
-  dueDate        DateTime?    @map("due_date") @db.Date
-  status         String       @default("PENDING")
-  paidAt         DateTime?    @map("paid_at")
-  paidById       String?      @map("paid_by_id") @db.Uuid
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @default(now()) @updatedAt @map("updated_at")
-  serviceOffer   ServiceOffer @relation(fields: [serviceOfferId], references: [id], onDelete: Cascade)
-  paidBy         User?        @relation("ServiceOfferInstallmentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  dueDate        DateTime?           @map("due_date") @db.Date
+  status         String              @default("PENDING")
+  paidAt         DateTime?           @map("paid_at")
+  paidById       String?             @map("paid_by_id") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @default(now()) @updatedAt @map("updated_at")
+  serviceOffer   ServiceOffer        @relation(fields: [serviceOfferId], references: [id], onDelete: Cascade)
+  paidBy         User?               @relation("ServiceOfferInstallmentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  allocations    PaymentAllocation[]
 
   @@unique([serviceOfferId, sequence])
   @@map("service_offer_installments")
+}
+
+enum PaymentTxnStatus {
+  COMPLETED
+  PENDING
+  FAILED
+  CANCELLED
+  REVERSED
+}
+
+enum ReceiptStatus {
+  GENERATED
+  VOID
+}
+
+/// Sequential counters for Payment ID / Receipt Number (PAY-######, RCP-######).
+model DocumentSequence {
+  key         String   @id
+  nextValue   Int      @default(1) @map("next_value")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("document_sequences")
+}
+
+model Payment {
+  id                   String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentNumber        String           @unique @map("payment_number")
+  leadId               String           @map("lead_id") @db.Uuid
+  serviceOfferId       String           @map("service_offer_id") @db.Uuid
+  amount               Decimal          @db.Decimal(14, 2)
+  currency             String           @default("BDT")
+  methodCode           String           @map("method_code")
+  methodName           String           @map("method_name")
+  transactionRef       String?          @map("transaction_ref")
+  paymentDate          DateTime         @map("payment_date") @db.Date
+  notes                String?          @db.VarChar(500)
+  status               PaymentTxnStatus @default(COMPLETED)
+  previousPaidAmount   Decimal          @default(0) @map("previous_paid_amount") @db.Decimal(14, 2)
+  remainingDueAmount   Decimal          @default(0) @map("remaining_due_amount") @db.Decimal(14, 2)
+  receivedById         String           @map("received_by_id") @db.Uuid
+  createdById          String?          @map("created_by_id") @db.Uuid
+  cancelledAt          DateTime?        @map("cancelled_at")
+  cancelledById        String?          @map("cancelled_by_id") @db.Uuid
+  cancelReason         String?          @map("cancel_reason") @db.Text
+  reversedAt           DateTime?        @map("reversed_at")
+  reversedById         String?          @map("reversed_by_id") @db.Uuid
+  reverseReason        String?          @map("reverse_reason") @db.Text
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @default(now()) @updatedAt @map("updated_at")
+  lead                 Lead             @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  serviceOffer         ServiceOffer     @relation(fields: [serviceOfferId], references: [id], onDelete: Restrict)
+  receivedBy           User             @relation("PaymentReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  createdBy            User?            @relation("PaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  cancelledBy          User?            @relation("PaymentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  reversedBy           User?            @relation("PaymentReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+  receipt              Receipt?
+  allocations          PaymentAllocation[]
+
+  @@index([leadId, createdAt])
+  @@index([serviceOfferId, createdAt])
+  @@index([status])
+  @@index([methodCode])
+  @@index([paymentDate])
+  @@index([receivedById])
+  @@index([transactionRef])
+  @@map("payments")
+}
+
+model PaymentAllocation {
+  id             String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentId      String                  @map("payment_id") @db.Uuid
+  installmentId  String?                 @map("installment_id") @db.Uuid
+  offerItemId    String?                 @map("offer_item_id") @db.Uuid
+  label          String
+  amount         Decimal                 @db.Decimal(14, 2)
+  createdAt      DateTime                @default(now()) @map("created_at")
+  payment        Payment                 @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  installment    ServiceOfferInstallment? @relation(fields: [installmentId], references: [id], onDelete: SetNull)
+
+  @@index([paymentId])
+  @@index([installmentId])
+  @@map("payment_allocations")
+}
+
+model Receipt {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  receiptNumber  String        @unique @map("receipt_number")
+  paymentId      String        @unique @map("payment_id") @db.Uuid
+  status         ReceiptStatus @default(GENERATED)
+  /// Immutable receipt content captured at generation time (no VAT/tax).
+  snapshot       Json
+  generatedAt    DateTime      @default(now()) @map("generated_at")
+  generatedById  String?       @map("generated_by_id") @db.Uuid
+  payment        Payment       @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  generatedBy    User?         @relation("ReceiptGeneratedBy", fields: [generatedById], references: [id], onDelete: SetNull)
+
+  @@index([generatedAt])
+  @@map("receipts")
 }
 
 model AuditLog {
@@ -876,6 +990,8 @@ model Lead {
   emailThreads        EmailThread[]
   serviceOffers       ServiceOffer[]
   documents           LeadDocument[]
+  payments            Payment[]
+  crmFile             CrmFile?
 
   @@index([status])
   @@index([ownerId])
@@ -906,21 +1022,110 @@ model LeadNote {
   @@map("lead_notes")
 }
 
+enum LeadDocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+  REPLACED
+
+  @@map("lead_document_status")
+}
+
+enum LeadDocumentActivityAction {
+  UPLOADED
+  VIEWED
+  DOWNLOADED
+  VERIFIED
+  REJECTED
+  REPLACED
+  ARCHIVED
+  RESTORED
+
+  @@map("lead_document_activity_action")
+}
+
+enum DocumentChecklistStage {
+  LEAD
+  FILE
+
+  @@map("document_checklist_stage")
+}
+
 model LeadDocument {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  leadId       String   @map("lead_id") @db.Uuid
-  fileName     String   @map("file_name")
-  mimeType     String   @map("mime_type")
-  storageKey   String   @map("storage_key")
-  fileSize     Int      @map("file_size")
-  uploadedById String?  @map("uploaded_by_id") @db.Uuid
-  createdAt    DateTime @default(now()) @map("created_at")
-  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  uploadedBy   User?    @relation("LeadDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId               String             @map("lead_id") @db.Uuid
+  documentGroupId      String             @default(dbgenerated("gen_random_uuid()")) @map("document_group_id") @db.Uuid
+  categoryCode         String             @default("OTHER") @map("category_code")
+  typeCode             String             @default("OTHER") @map("type_code")
+  name                 String             @default("")
+  fileName             String             @map("file_name")
+  mimeType             String             @map("mime_type")
+  storageKey           String             @map("storage_key")
+  fileSize             Int                @map("file_size")
+  versionNumber        Int                @default(1) @map("version_number")
+  isLatest             Boolean            @default(true) @map("is_latest")
+  status               LeadDocumentStatus @default(PENDING)
+  documentDate         DateTime?          @map("document_date") @db.Date
+  expiryDate           DateTime?          @map("expiry_date") @db.Date
+  remarks              String?            @db.Text
+  isSensitive          Boolean            @default(false) @map("is_sensitive")
+  verifiedById         String?            @map("verified_by_id") @db.Uuid
+  verifiedAt           DateTime?          @map("verified_at")
+  verificationRemarks  String?            @map("verification_remarks") @db.Text
+  rejectionReason      String?            @map("rejection_reason") @db.Text
+  archivedAt           DateTime?          @map("archived_at")
+  uploadedById         String?            @map("uploaded_by_id") @db.Uuid
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @default(now()) @updatedAt @map("updated_at")
+  lead                 Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  uploadedBy           User?              @relation("LeadDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  verifiedBy           User?              @relation("LeadDocumentVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+  activities           LeadDocumentActivity[]
 
   @@index([leadId])
+  @@index([leadId, typeCode, isLatest])
+  @@index([documentGroupId])
   @@index([uploadedById])
+  @@index([verifiedById])
+  @@index([status])
+  @@index([expiryDate])
+  @@index([archivedAt])
   @@map("lead_documents")
+}
+
+model LeadDocumentActivity {
+  id         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String                     @map("document_id") @db.Uuid
+  action     LeadDocumentActivityAction
+  notes      String?                    @db.Text
+  metadata   Json?
+  userId     String?                    @map("user_id") @db.Uuid
+  createdAt  DateTime                   @default(now()) @map("created_at")
+  document   LeadDocument               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User?                      @relation("LeadDocumentActivityActor", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+  @@index([userId])
+  @@map("lead_document_activities")
+}
+
+model DocumentChecklistRule {
+  id           String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryCode String                 @map("category_code")
+  typeCode     String                 @map("type_code")
+  name         String
+  stage        DocumentChecklistStage @default(LEAD)
+  isRequired   Boolean                @default(true) @map("is_required")
+  isSensitive  Boolean                @default(false) @map("is_sensitive")
+  sortOrder    Int                    @default(0) @map("sort_order")
+  isActive     Boolean                @default(true) @map("is_active")
+  createdAt    DateTime               @default(now()) @map("created_at")
+  updatedAt    DateTime               @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([stage, typeCode])
+  @@index([stage, isActive, sortOrder])
+  @@map("document_checklist_rules")
 }
 
 model CountryAssignmentRule {
@@ -1058,23 +1263,6 @@ model CrmDocument {
   @@index([status])
   @@index([uploadedById])
   @@map("crm_documents")
-}
-
-model Payment {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  invoice   String   @unique
-  payerName String   @map("payer_name")
-  type      String
-  amount    String
-  method    String?
-  status    String
-  paidAt    DateTime? @map("paid_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
-
-  @@index([status])
-  @@index([createdAt])
-  @@map("payments")
 }
 
 model FollowUp {
@@ -1530,4 +1718,237 @@ model EmailTemplate {
 
   @@index([isActive, sortOrder])
   @@map("email_templates")
+}
+
+enum CrmFileStatus {
+  OPEN
+
+  @@map("crm_file_status")
+}
+
+enum FileDocumentReadiness {
+  INCOMPLETE
+  COMPLETE
+
+  @@map("file_document_readiness")
+}
+
+enum FileDocumentStatus {
+  NOT_REQUESTED
+  REQUESTED
+  RECEIVED
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  REUPLOAD_REQUIRED
+  ARCHIVED
+
+  @@map("file_document_status")
+}
+
+enum FileDocumentRequirement {
+  REQUIRED
+  OPTIONAL
+
+  @@map("file_document_requirement")
+}
+
+enum FileUploadActorKind {
+  EMPLOYEE
+  STUDENT_PORTAL
+
+  @@map("file_upload_actor_kind")
+}
+
+enum FileDocumentRequestMethod {
+  WHATSAPP
+  EMAIL
+  PHONE
+  IN_PERSON
+  OTHER
+
+  @@map("file_document_request_method")
+}
+
+enum FileDocumentRequestStatus {
+  OPEN
+  FULFILLED
+  CANCELLED
+
+  @@map("file_document_request_status")
+}
+
+enum FileDocumentActivityAction {
+  REQUESTED
+  UPLOADED
+  REVIEW_STARTED
+  VERIFIED
+  REJECTED
+  REUPLOADED
+  ARCHIVED
+  PRIMARY_MARKED
+  CHECKLIST_ADDED
+  CHECKLIST_REMOVED
+  CHECKLIST_UPDATED
+  VIEWED
+  DOWNLOADED
+
+  @@map("file_document_activity_action")
+}
+
+/// CRM-009 file opened after lead conversion. Document completion is separate from file status.
+model CrmFile {
+  id                 String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code               String                 @unique
+  leadId             String                 @unique @map("lead_id") @db.Uuid
+  studentName        String                 @map("student_name")
+  ownerId            String?                @map("owner_id") @db.Uuid
+  status             CrmFileStatus          @default(OPEN)
+  documentReadiness  FileDocumentReadiness  @default(INCOMPLETE) @map("document_readiness")
+  openedById         String?                @map("opened_by_id") @db.Uuid
+  openedAt           DateTime               @default(now()) @map("opened_at")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @default(now()) @updatedAt @map("updated_at")
+  lead               Lead                   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  owner              User?                  @relation("CrmFileOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  openedBy           User?                  @relation("CrmFileOpenedBy", fields: [openedById], references: [id], onDelete: SetNull)
+  checklistItems     FileChecklistItem[]
+  documents          FileDocument[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([documentReadiness])
+  @@map("crm_files")
+}
+
+model FileChecklistItem {
+  id           String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fileId       String                  @map("file_id") @db.Uuid
+  categoryCode String                  @map("category_code")
+  categoryName String                  @map("category_name")
+  typeCode     String                  @map("type_code")
+  typeName     String                  @map("type_name")
+  isRequired   Boolean                 @default(true) @map("is_required")
+  isActive     Boolean                 @default(true) @map("is_active")
+  sortOrder    Int                     @default(0) @map("sort_order")
+  addedById    String?                 @map("added_by_id") @db.Uuid
+  createdAt    DateTime                @default(now()) @map("created_at")
+  updatedAt    DateTime                @default(now()) @updatedAt @map("updated_at")
+  file         CrmFile                 @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  addedBy      User?                   @relation("FileChecklistAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+  document     FileDocument?
+
+  @@unique([fileId, typeCode])
+  @@index([fileId, isActive, sortOrder])
+  @@map("file_checklist_items")
+}
+
+model FileDocument {
+  id                   String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                 String                    @unique
+  fileId               String                    @map("file_id") @db.Uuid
+  checklistItemId      String?                   @unique @map("checklist_item_id") @db.Uuid
+  categoryCode         String                    @map("category_code")
+  categoryNameSnapshot String                    @map("category_name_snapshot")
+  typeCode             String                    @map("type_code")
+  typeNameSnapshot     String                    @map("type_name_snapshot")
+  requirement          FileDocumentRequirement?
+  status               FileDocumentStatus        @default(NOT_REQUESTED)
+  archivedAt           DateTime?                 @map("archived_at")
+  createdAt            DateTime                  @default(now()) @map("created_at")
+  updatedAt            DateTime                  @default(now()) @updatedAt @map("updated_at")
+  file                 CrmFile                   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  checklistItem        FileChecklistItem?        @relation(fields: [checklistItemId], references: [id], onDelete: SetNull)
+  versions             FileDocumentVersion[]
+  requests             FileDocumentRequest[]
+  activities           FileDocumentActivity[]
+
+  @@index([fileId, typeCode])
+  @@index([fileId, status])
+  @@index([status])
+  @@index([archivedAt])
+  @@map("file_documents")
+}
+
+model FileDocumentVersion {
+  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId           String               @map("document_id") @db.Uuid
+  versionNumber        Int                  @map("version_number")
+  isLatest             Boolean              @default(true) @map("is_latest")
+  documentDate         DateTime?            @map("document_date") @db.Date
+  expiryDate           DateTime?            @map("expiry_date") @db.Date
+  remarks              String?              @db.Text
+  rejectionReasonCode  String?              @map("rejection_reason_code")
+  rejectionReasonName  String?              @map("rejection_reason_name")
+  rejectionRemarks     String?              @map("rejection_remarks") @db.Text
+  verifiedById         String?              @map("verified_by_id") @db.Uuid
+  verifiedAt           DateTime?            @map("verified_at")
+  verificationRemarks  String?              @map("verification_remarks") @db.Text
+  uploadedById         String?              @map("uploaded_by_id") @db.Uuid
+  uploadedByKind       FileUploadActorKind  @default(EMPLOYEE) @map("uploaded_by_kind")
+  createdAt            DateTime             @default(now()) @map("created_at")
+  document             FileDocument         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy           User?                @relation("FileDocumentVersionUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  verifiedBy           User?                @relation("FileDocumentVersionVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+  assets               FileDocumentAsset[]
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId, isLatest])
+  @@index([expiryDate])
+  @@index([uploadedById])
+  @@index([verifiedById])
+  @@map("file_document_versions")
+}
+
+model FileDocumentAsset {
+  id         String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionId  String              @map("version_id") @db.Uuid
+  fileName   String              @map("file_name")
+  label      String?
+  mimeType   String              @map("mime_type")
+  storageKey String              @map("storage_key")
+  fileSize   Int                 @map("file_size")
+  isPrimary  Boolean             @default(false) @map("is_primary")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  version    FileDocumentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId, isPrimary])
+  @@map("file_document_assets")
+}
+
+model FileDocumentRequest {
+  id                   String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                 String                    @unique
+  documentId           String                    @map("document_id") @db.Uuid
+  requestedById        String?                   @map("requested_by_id") @db.Uuid
+  dueDate              DateTime?                 @map("due_date") @db.Date
+  method               FileDocumentRequestMethod
+  remarks              String?                   @db.Text
+  status               FileDocumentRequestStatus @default(OPEN)
+  activityId           String?                   @map("activity_id") @db.Uuid
+  communicationEventId String?                   @map("communication_event_id") @db.Uuid
+  createdAt            DateTime                  @default(now()) @map("created_at")
+  document             FileDocument              @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  requestedBy          User?                     @relation("FileDocumentRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+  @@index([requestedById])
+  @@index([dueDate])
+  @@map("file_document_requests")
+}
+
+model FileDocumentActivity {
+  id         String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  documentId String                     @map("document_id") @db.Uuid
+  action     FileDocumentActivityAction
+  notes      String?                    @db.Text
+  metadata   Json?
+  userId     String?                    @map("user_id") @db.Uuid
+  createdAt  DateTime                   @default(now()) @map("created_at")
+  document   FileDocument               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User?                      @relation("FileDocumentActivityActor", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+  @@index([userId])
+  @@map("file_document_activities")
 }

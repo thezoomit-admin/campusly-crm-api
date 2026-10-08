@@ -28,6 +28,7 @@ import {
   assigneeVisibilityWhere,
   leadEligibleAssigneeWhere,
   computeLeadScore,
+  displayedLeadScore,
   FOLLOW_UP_CLOSED_STATUSES,
   formatWaitingTime,
   hasPermission,
@@ -125,6 +126,7 @@ function serializeLead(
   options?: { hasPhoneDuplicate?: boolean },
 ) {
   const completion = profileCompletion(lead);
+  const scored = displayedLeadScore(lead);
   return {
     id: lead.id,
     code: lead.code,
@@ -217,9 +219,9 @@ function serializeLead(
     unqualifiedRemarks: lead.unqualifiedRemarks,
     profileCompletion: completion.percent,
     completion: completion.sections,
-    leadScore: lead.leadScore,
-    priority: lead.priority,
-    priorityCode: lead.priorityCode,
+    leadScore: scored.score,
+    priority: scored.priority,
+    priorityCode: scored.priorityCode,
     priorityManual: lead.priorityManual,
     priorityOverrideReason: lead.priorityOverrideReason,
     owner: lead.owner
@@ -319,6 +321,7 @@ function listItem(
   nextFollowUpAt: string | null = null,
   hasPhoneDuplicate = false,
 ) {
+  const scored = displayedLeadScore(lead);
   return {
     id: lead.id,
     code: lead.code,
@@ -330,8 +333,8 @@ function listItem(
     source: lead.source || "—",
     owner: lead.owner?.fullName || lead.ownerName || "—",
     status: lead.status,
-    priority: lead.priority || "—",
-    score: String(lead.leadScore ?? 0),
+    priority: scored.priority || "—",
+    score: String(scored.score),
     nextFollowUpAt,
     updated: daysAgoLabel(lead.updatedAt),
     createdAt: lead.createdAt.toISOString(),
@@ -1607,7 +1610,7 @@ export async function updateQualification(
       data: {
         ...next,
         profileCompletion: completion.percent,
-        leadScore: current.priorityManual ? current.leadScore : scored.score,
+        leadScore: scored.score,
         priority: current.priorityManual ? current.priority : scored.priority,
         priorityCode: current.priorityManual
           ? current.priorityCode
@@ -1858,6 +1861,15 @@ export async function updateLeadStatus(
       });
       return updated;
     });
+
+    if (next.behaviorKey === "file_opened") {
+      try {
+        const { openCrmFile } = await import("../files/file-documents.service");
+        await openCrmFile(auth, id, meta);
+      } catch (error) {
+        console.error("[files] File opening after status change failed:", error);
+      }
+    }
 
     await writeAuditLog({
       userId: auth.user.id,
@@ -2614,6 +2626,7 @@ export async function listMyLeads(
         const next = nextByLead.get(id);
         const activity = activityByLead.get(id);
         const assignedMs = assignedAt.get(id);
+        const scored = displayedLeadScore(lead);
         return [
           {
             id: lead.id,
@@ -2622,8 +2635,8 @@ export async function listMyLeads(
             phone: lead.phone || "—",
             country: lead.country || "—",
             status: lead.status,
-            score: lead.leadScore ?? 0,
-            priority: lead.priority || "—",
+            score: scored.score,
+            priority: scored.priority || "—",
             nextFollowUpAt: next?.dueAt ? next.dueAt.toISOString() : null,
             lastActivity: activity ? lastActivityLabel(activity) : "—",
             lastActivityAt: activity ? activity.occurredAt.toISOString() : null,

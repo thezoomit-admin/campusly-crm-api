@@ -19,7 +19,6 @@ import {
   nextOfferVersion,
   offerValidityDays,
   recordInitialStatus,
-  syncOfferPaymentStatus,
   writeOfferTimeline,
   type AuditMeta,
 } from './offer-lifecycle'
@@ -65,6 +64,7 @@ const userRef = { select: { id: true, fullName: true } }
 const offerInclude = {
   items: { orderBy: { sortOrder: 'asc' as const } },
   installments: { orderBy: { sequence: 'asc' as const }, include: { paidBy: userRef } },
+  payments: { where: { status: 'COMPLETED' as const }, select: { amount: true } },
   generatedBy: userRef,
   createdBy: userRef,
   updatedBy: userRef,
@@ -88,9 +88,14 @@ function moneyOrNull(value: { toString(): string } | null | undefined) {
 function serialize(row: OfferRow) {
   const finalPayable = Number(row.finalPayable)
   const initialPayment = row.initialPayment == null ? null : Number(row.initialPayment)
-  const paid = row.installments
+  const paidFromPayments = (row.payments || []).reduce(
+    (sum, item) => sum + Math.round(Number(item.amount) * 100),
+    0,
+  )
+  const paidFromInstallments = row.installments
     .filter((item) => item.status === 'PAID')
     .reduce((sum, item) => sum + Math.round(Number(item.amount) * 100), 0)
+  const paid = (row.payments || []).length > 0 ? paidFromPayments : paidFromInstallments
   return {
     id: row.id,
     leadId: row.leadId,
@@ -1118,30 +1123,14 @@ export async function acceptLeadServiceOffer(auth: AuthContext, leadId: string, 
 }
 
 export async function listLeadPayments(auth: AuthContext, leadId: string) {
-  if (!hasPermission(auth.permissions, 'payment:view') && !hasPermission(auth.permissions, 'service:view')) {
-    throw httpError.accessDenied()
-  }
-  const lead = await assertCanViewLead(auth, leadId)
+  const { listLeadPaymentHistory } = await import('../payments/payments.service')
+  const history = await listLeadPaymentHistory(auth, leadId)
 
-  const offers = await prisma.serviceOffer.findMany({
-    where: { leadId, installments: { some: {} } },
-    include: {
-      installments: {
-        orderBy: { sequence: 'asc' },
-        include: { paidBy: userRef },
-      },
-    },
-    orderBy: { offerVersion: 'desc' },
-  })
-
-  const active =
-    offers.find((offer) => ACTIVE_STATUSES.includes(offer.status) && offer.status !== 'ACCEPTED') ||
-    offers.find((offer) => ACTIVE_STATUSES.includes(offer.status)) ||
-    null
-
-  // Heal lead conversion when payment already exists (e.g. recorded before this rule shipped).
+  // Heal lead conversion when payment already exists.
   let leadStatusChanged = false
+  const active = history.summary.activeOffer
   if (active && (active.status === 'PARTIALLY_PAID' || active.status === 'PAID')) {
+    const lead = await assertCanViewLead(auth, leadId)
     const result = await prisma.$transaction((tx) =>
       advanceLeadPipelineStatus(tx, {
         leadId: lead.id,
@@ -1156,59 +1145,7 @@ export async function listLeadPayments(auth: AuthContext, leadId: string) {
     leadStatusChanged = result.changed
   }
 
-  const canRecordPayment = hasPermission(auth.permissions, 'payment:create')
-  const items = offers.flatMap((offer) => {
-    const payable = offer.status === 'PAYMENT_PENDING' || offer.status === 'PARTIALLY_PAID'
-    return offer.installments.map((item) => ({
-      id: item.id,
-      offerId: offer.id,
-      offerVersion: offer.offerVersion,
-      packageName: offer.packageName,
-      offerStatus: offer.status,
-      sequence: item.sequence,
-      purpose: item.purpose,
-      amount: money(item.amount),
-      dueDate: item.dueDate ? item.dueDate.toISOString().slice(0, 10) : null,
-      status: item.status === 'PAID' ? ('PAID' as const) : ('PENDING' as const),
-      paidAt: item.paidAt?.toISOString() ?? null,
-      paidBy: item.paidBy,
-      canRecord: canRecordPayment && payable && item.status !== 'PAID',
-    }))
-  })
-
-  const paidCents = items
-    .filter((item) => item.status === 'PAID')
-    .reduce((sum, item) => sum + Math.round(Number(item.amount) * 100), 0)
-  const finalPayable = active ? Number(active.finalPayable) : 0
-  const dueCents = active
-    ? Math.max(
-        0,
-        Math.round(finalPayable * 100) -
-          active.installments
-            .filter((item) => item.status === 'PAID')
-            .reduce((sum, item) => sum + Math.round(Number(item.amount) * 100), 0),
-      )
-    : 0
-
-  return {
-    summary: {
-      finalPayable: money(finalPayable),
-      paidAmount: money(paidCents / 100),
-      dueAmount: money(dueCents / 100),
-      currency: 'BDT' as const,
-      activeOffer: active
-        ? {
-            id: active.id,
-            offerVersion: active.offerVersion,
-            status: active.status,
-            packageName: active.packageName,
-          }
-        : null,
-    },
-    permissions: { canRecordPayment },
-    leadStatusChanged,
-    items,
-  }
+  return { ...history, leadStatusChanged }
 }
 
 export async function recordOfferInstallmentPayment(
@@ -1218,70 +1155,9 @@ export async function recordOfferInstallmentPayment(
   installmentId: string,
   meta: AuditMeta,
 ) {
-  if (!hasPermission(auth.permissions, 'payment:create')) throw httpError.accessDenied(LIFECYCLE_MESSAGES.permissionDenied)
-  const lead = await assertCanViewLead(auth, leadId)
-  await prisma.$transaction(async (tx) => {
-    await lockLead(tx, leadId)
-    const offer = await tx.serviceOffer.findFirst({
-      where: { id: offerId, leadId },
-      select: { ...offerRefSelect, packageName: true },
-    })
-    if (!offer) throw httpError.notFound(LIFECYCLE_MESSAGES.notFound)
-    if (offer.status !== 'PAYMENT_PENDING' && offer.status !== 'PARTIALLY_PAID') {
-      throw httpError.conflict(LIFECYCLE_MESSAGES.paymentState, 'OFFER_NOT_PAYABLE')
-    }
-    const installment = await tx.serviceOfferInstallment.findFirst({
-      where: { id: installmentId, serviceOfferId: offerId },
-    })
-    if (!installment) throw httpError.notFound('The requested installment could not be found.')
-    if (installment.status === 'PAID') throw httpError.conflict(LIFECYCLE_MESSAGES.installmentPaid, 'INSTALLMENT_PAID')
-
-    const paidAt = new Date()
-    await tx.serviceOfferInstallment.update({
-      where: { id: installment.id },
-      data: { status: 'PAID', paidAt, paidById: auth.user.id },
-    })
-
-    const invoice = `INV-SO${offer.offerVersion}-${installment.sequence}-${installment.id.replace(/-/g, '').slice(0, 8).toUpperCase()}`
-    await tx.payment.create({
-      data: {
-        invoice,
-        payerName: lead.name,
-        type: installment.purpose || 'Service Charge',
-        amount: `৳ ${Number(installment.amount).toLocaleString('en-BD', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`,
-        method: 'CRM Recorded',
-        status: 'Paid',
-        paidAt,
-      },
-    })
-
-    await writeOfferTimeline(tx, {
-      offer,
-      action: 'SERVICE_OFFER_PAYMENT_RECORDED',
-      actorId: auth.user.id,
-      meta,
-      extra: {
-        installmentSequence: installment.sequence,
-        amount: money(installment.amount),
-        purpose: installment.purpose,
-        invoice,
-      },
-    })
-    const nextStatus = await syncOfferPaymentStatus(tx, offerId, auth.user.id, meta)
-    if (nextStatus === 'PARTIALLY_PAID' || nextStatus === 'PAID') {
-      await advanceLeadPipelineStatus(tx, {
-        leadId,
-        actorId: auth.user.id,
-        targetCode: 'CONVERTED',
-        remarks:
-          nextStatus === 'PAID'
-            ? `Service offer V${offer.offerVersion} fully paid`
-            : `First payment recorded on offer V${offer.offerVersion}`,
-        meta,
-      })
-    }
-  })
-  return { offer: await loadOffer(offerId), message: 'Payment recorded.' }
+  const { recordInstallmentAsPayment } = await import('../payments/payments.service')
+  const result = await recordInstallmentAsPayment(auth, leadId, offerId, installmentId, meta)
+  return { offer: await loadOffer(offerId), payment: result.payment, receipt: result.receipt, message: result.message }
 }
 
 /** Only an unused draft (never generated, not a revision, latest version) may be removed. */

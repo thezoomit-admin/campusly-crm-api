@@ -30,6 +30,8 @@ import { metaLeadsRouter } from './modules/meta-leads/meta-leads.routes'
 import { serviceItemsRouter } from './modules/service-items/service-items.routes'
 import { packagesRouter } from './modules/packages/packages.routes'
 import { serviceOffersRouter } from './modules/packages/service-offers.routes'
+import { leadPaymentsRouter, paymentsRouter, receiptsRouter } from './modules/payments/payments.routes'
+import { filesRouter } from './modules/files/files.routes'
 
 export function createApp() {
   const app = express()
@@ -75,9 +77,13 @@ export function createApp() {
   app.use('/api/service-items', serviceItemsRouter)
   app.use('/api/packages', packagesRouter)
   app.use('/api/leads/:leadId/service-offers', serviceOffersRouter)
+  app.use('/api/leads/:leadId/payments', leadPaymentsRouter)
+  app.use('/api/payments', paymentsRouter)
+  app.use('/api/receipts', receiptsRouter)
   app.use('/api/audit-logs', auditRouter)
   app.use('/api/activities', activitiesRouter)
   app.use('/api/leads', leadsRouter)
+  app.use('/api/files', filesRouter)
   app.use('/api/follow-ups', followUpsRouter)
   app.use('/api/notifications', notificationsRouter)
   app.use('/api/communications', communicationsRouter)

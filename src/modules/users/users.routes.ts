@@ -8,6 +8,7 @@ import { respondWithExport } from '../../lib/xlsx-export'
 import { requestPasswordReset, sendAccountInvite } from '../auth/password-reset.service'
 import { requireAuth, requirePermission } from '../auth/require-auth.middleware'
 import {
+  adminChangeUserPassword,
   createUser,
   exportUsersTable,
   forceLogoutAll,
@@ -222,6 +223,27 @@ usersRouter.post('/:id/password-reset', requirePermission('user:configure'), asy
             userAgent: requestUserAgent(req),
           })
     res.json(result.body)
+  } catch (error) {
+    next(error)
+  }
+})
+
+usersRouter.post('/:id/change-password', requirePermission('user:configure'), async (req, res, next) => {
+  try {
+    const result = await adminChangeUserPassword(
+      req.auth!,
+      routeParam(req.params.id),
+      {
+        currentPassword: req.body?.currentPassword,
+        newPassword: req.body?.newPassword,
+        confirmPassword: req.body?.confirmPassword,
+      },
+      {
+        ipAddress: requestIp(req),
+        userAgent: requestUserAgent(req),
+      },
+    )
+    res.json(result)
   } catch (error) {
     next(error)
   }

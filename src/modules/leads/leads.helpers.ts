@@ -392,52 +392,306 @@ export function profileCompletion(lead: {
   return { percent, sections }
 }
 
-function fitPoints(code: string | null | undefined, map: Record<string, number>) {
-  return code ? map[code] ?? 0 : 0
+function hasValue(value: unknown) {
+  if (value == null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (value instanceof Date) return !Number.isNaN(value.getTime())
+  return false
 }
 
-export function computeLeadScore(lead: {
-  academicFitCode?: string | null
-  financialReadinessCode?: string | null
-  englishReadinessCode?: string | null
+function answered(value: boolean | null | undefined) {
+  return value === true || value === false
+}
+
+function ratio(checks: boolean[]) {
+  if (!checks.length) return 1
+  return checks.filter(Boolean).length / checks.length
+}
+
+export type LeadScoreInput = {
+  name?: string | null
+  phone?: string | null
+  email?: string | null
+  dateOfBirth?: Date | string | null
+  currentLocation?: string | null
+  whatsapp?: string | null
+  whatsappSameAsPhone?: boolean | null
+  preferredCountryCode?: string | null
+  preferredDegreeCode?: string | null
+  preferredCourse?: string | null
+  preferredIntakeCode?: string | null
+  studyPurposeCode?: string | null
+  studyPurposeOther?: string | null
+  highestQualificationCode?: string | null
+  institutionName?: string | null
+  passingYear?: number | string | null
+  resultCgpa?: string | null
+  studyGapYears?: number | string | null
   englishTestCode?: string | null
   testStatusCode?: string | null
-  overallScore?: number | null
-  countryIntakeFitCode?: string | null
-  studyIntentCode?: string | null
-  studyIntentQualCode?: string | null
+  overallScore?: number | string | null
+  testDate?: Date | string | null
+  listening?: number | string | null
+  reading?: number | string | null
+  writing?: number | string | null
+  speaking?: number | string | null
+  estimatedBudgetCode?: string | null
+  fundingSourceCode?: string | null
+  financialReadinessCode?: string | null
+  previouslyAppliedAbroad?: boolean | null
+  previousVisaApplication?: boolean | null
+  previousVisaRefusal?: boolean | null
+  prevVisaCountry?: string | null
+  prevVisaType?: string | null
+  prevVisaYear?: number | string | null
+  prevVisaResult?: string | null
+  refusalCountry?: string | null
+  refusalYear?: number | string | null
+  refusalReason?: string | null
   decisionTimelineCode?: string | null
+  decisionMakerCode?: string | null
   applicationReadinessCode?: string | null
-}) {
-  const academic = fitPoints(lead.academicFitCode, { STRONG: 15, GOOD: 11, AVERAGE: 7, WEAK: 3 })
-  const financial = fitPoints(lead.financialReadinessCode, { READY: 15, PARTIAL: 9, NOT_READY: 3, UNKNOWN: 5 })
-  let english = fitPoints(lead.englishReadinessCode, { READY: 15, PARTIAL: 9, NOT_READY: 3, UNKNOWN: 5 })
-  if (!english && lead.testStatusCode === 'TAKEN') {
-    english = lead.overallScore != null && lead.overallScore >= 6 ? 12 : 8
-  } else if (!english && lead.englishTestCode && lead.englishTestCode !== 'NONE') {
-    english = 6
+  studyIntentCode?: string | null
+  preferredContactMethodCode?: string | null
+  preferredContactTimeCode?: string | null
+  specificContactTime?: string | null
+  sourceCode?: string | null
+  channelCode?: string | null
+  campaign?: string | null
+  campaignId?: string | null
+  sourceDetails?: string | null
+  externalLeadId?: string | null
+  remarks?: string | null
+  referralBy?: string | null
+  referralDetails?: string | null
+}
+
+/**
+ * Lead Score is how much of the student profile is filled.
+ * Weights sum to 100. Conditional fields (test bands, visa details,
+ * referral, specific contact time, "other" purpose) count only when they apply.
+ * A fully answered profile is 100. Priority follows the score unless overridden.
+ */
+export function computeLeadScore(lead: LeadScoreInput) {
+  const personal = ratio([
+    hasValue(lead.name),
+    hasValue(lead.phone),
+    hasValue(lead.email),
+    hasValue(lead.dateOfBirth),
+    hasValue(lead.currentLocation),
+    lead.whatsappSameAsPhone ? hasValue(lead.phone) : hasValue(lead.whatsapp),
+  ])
+  const study = ratio([
+    hasValue(lead.preferredCountryCode),
+    hasValue(lead.preferredDegreeCode),
+    hasValue(lead.preferredCourse),
+    hasValue(lead.preferredIntakeCode),
+    hasValue(lead.studyPurposeCode) &&
+      (lead.studyPurposeCode !== 'OTHER' || hasValue(lead.studyPurposeOther)),
+  ])
+  const academic = ratio([
+    hasValue(lead.highestQualificationCode),
+    hasValue(lead.institutionName),
+    hasValue(lead.passingYear),
+    hasValue(lead.resultCgpa),
+    hasValue(lead.studyGapYears),
+  ])
+  const englishChecks = [hasValue(lead.englishTestCode), hasValue(lead.testStatusCode)]
+  if (lead.testStatusCode === 'TAKEN') {
+    englishChecks.push(
+      hasValue(lead.overallScore),
+      hasValue(lead.testDate),
+      hasValue(lead.listening),
+      hasValue(lead.reading),
+      hasValue(lead.writing),
+      hasValue(lead.speaking),
+    )
   }
-  const countryFit = fitPoints(lead.countryIntakeFitCode, { STRONG: 10, GOOD: 8, AVERAGE: 5, WEAK: 2 })
-  const intent = fitPoints(lead.studyIntentQualCode || lead.studyIntentCode, {
-    HIGH: 15,
-    MEDIUM: 9,
-    LOW: 4,
-    STRONG: 15,
-    GOOD: 11,
-  })
-  const timeline = fitPoints(lead.decisionTimelineCode, {
-    IMMEDIATE: 10,
-    '1_3_MONTHS': 8,
-    '3_6_MONTHS': 5,
-    '6_PLUS_MONTHS': 3,
-    EXPLORING: 2,
-  })
-  const readiness = fitPoints(lead.applicationReadinessCode, { READY_NOW: 10, PLANNING: 6, EXPLORING: 3 })
-  const raw = academic + financial + english + countryFit + intent + timeline + readiness
-  const score = Math.max(0, Math.min(100, Math.round((raw / 90) * 100)))
+  const english = ratio(englishChecks)
+  const financial = ratio([
+    hasValue(lead.estimatedBudgetCode),
+    hasValue(lead.fundingSourceCode),
+    hasValue(lead.financialReadinessCode),
+  ])
+  const visaChecks = [
+    answered(lead.previouslyAppliedAbroad),
+    answered(lead.previousVisaApplication),
+    answered(lead.previousVisaRefusal),
+  ]
+  if (lead.previousVisaApplication === true) {
+    visaChecks.push(
+      hasValue(lead.prevVisaCountry),
+      hasValue(lead.prevVisaType),
+      hasValue(lead.prevVisaYear),
+      hasValue(lead.prevVisaResult),
+    )
+  }
+  if (lead.previousVisaRefusal === true) {
+    visaChecks.push(
+      hasValue(lead.refusalCountry),
+      hasValue(lead.refusalYear),
+      hasValue(lead.refusalReason),
+    )
+  }
+  const visa = ratio(visaChecks)
+  const intent = ratio([
+    hasValue(lead.decisionTimelineCode),
+    hasValue(lead.decisionMakerCode),
+    hasValue(lead.applicationReadinessCode),
+    hasValue(lead.studyIntentCode),
+  ])
+  const contactChecks = [
+    hasValue(lead.preferredContactMethodCode),
+    hasValue(lead.preferredContactTimeCode),
+  ]
+  if (lead.preferredContactTimeCode === 'SPECIFIC') {
+    contactChecks.push(hasValue(lead.specificContactTime))
+  }
+  const contact = ratio(contactChecks)
+  const sourceChecks = [
+    hasValue(lead.sourceCode),
+    hasValue(lead.channelCode),
+    hasValue(lead.campaignId) || hasValue(lead.campaign),
+    hasValue(lead.sourceDetails),
+    hasValue(lead.externalLeadId),
+    hasValue(lead.remarks),
+  ]
+  if (lead.sourceCode === 'REFERRAL') {
+    sourceChecks.push(hasValue(lead.referralBy), hasValue(lead.referralDetails))
+  }
+  const source = ratio(sourceChecks)
+
+  const weights = {
+    personal: 16,
+    study: 16,
+    academic: 14,
+    english: 14,
+    financial: 12,
+    visa: 10,
+    intent: 10,
+    contact: 4,
+    source: 4,
+  }
+  const raw =
+    personal * weights.personal +
+    study * weights.study +
+    academic * weights.academic +
+    english * weights.english +
+    financial * weights.financial +
+    visa * weights.visa +
+    intent * weights.intent +
+    contact * weights.contact +
+    source * weights.source
+  const score = Math.max(0, Math.min(100, Math.round(raw)))
   const priorityCode = score >= 75 ? 'HIGH' : score >= 45 ? 'MEDIUM' : 'LOW'
   const priority = priorityCode === 'HIGH' ? 'High' : priorityCode === 'MEDIUM' ? 'Medium' : 'Low'
   return { score, priorityCode, priority }
+}
+
+export function displayedLeadScore(
+  lead: LeadScoreInput & {
+    priorityManual?: boolean | null
+    priority?: string | null
+    priorityCode?: string | null
+  },
+) {
+  const scored = computeLeadScore(lead)
+  if (!lead.priorityManual) return scored
+  return {
+    score: scored.score,
+    priority: lead.priority || scored.priority,
+    priorityCode: lead.priorityCode || scored.priorityCode,
+  }
+}
+
+/** Rewrite stored scores from current profile data without touching updated_at. */
+export async function syncStoredLeadScores() {
+  const leads = await prisma.lead.findMany({
+    select: {
+      id: true,
+      priorityManual: true,
+      leadScore: true,
+      priority: true,
+      priorityCode: true,
+      name: true,
+      phone: true,
+      email: true,
+      dateOfBirth: true,
+      currentLocation: true,
+      whatsapp: true,
+      whatsappSameAsPhone: true,
+      preferredCountryCode: true,
+      preferredDegreeCode: true,
+      preferredCourse: true,
+      preferredIntakeCode: true,
+      studyPurposeCode: true,
+      studyPurposeOther: true,
+      highestQualificationCode: true,
+      institutionName: true,
+      passingYear: true,
+      resultCgpa: true,
+      studyGapYears: true,
+      englishTestCode: true,
+      testStatusCode: true,
+      overallScore: true,
+      testDate: true,
+      listening: true,
+      reading: true,
+      writing: true,
+      speaking: true,
+      estimatedBudgetCode: true,
+      fundingSourceCode: true,
+      financialReadinessCode: true,
+      previouslyAppliedAbroad: true,
+      previousVisaApplication: true,
+      previousVisaRefusal: true,
+      prevVisaCountry: true,
+      prevVisaType: true,
+      prevVisaYear: true,
+      prevVisaResult: true,
+      refusalCountry: true,
+      refusalYear: true,
+      refusalReason: true,
+      decisionTimelineCode: true,
+      decisionMakerCode: true,
+      applicationReadinessCode: true,
+      studyIntentCode: true,
+      preferredContactMethodCode: true,
+      preferredContactTimeCode: true,
+      specificContactTime: true,
+      sourceCode: true,
+      channelCode: true,
+      campaign: true,
+      campaignId: true,
+      sourceDetails: true,
+      externalLeadId: true,
+      remarks: true,
+      referralBy: true,
+      referralDetails: true,
+    },
+  })
+
+  let updated = 0
+  for (const lead of leads) {
+    const scored = displayedLeadScore(lead)
+    if (
+      lead.leadScore === scored.score &&
+      (lead.priority || null) === (scored.priority || null) &&
+      (lead.priorityCode || null) === (scored.priorityCode || null)
+    ) {
+      continue
+    }
+    await prisma.$executeRaw`
+      UPDATE leads
+      SET lead_score = ${scored.score},
+          priority = ${scored.priority},
+          priority_code = ${scored.priorityCode}
+      WHERE id = ${lead.id}::uuid
+    `
+    updated += 1
+  }
+  return updated
 }
 
 export { canReceiveLeadAssignment, hasPermission }

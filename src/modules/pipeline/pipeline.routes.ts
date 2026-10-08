@@ -155,26 +155,29 @@ pipelineRouter.get('/students', requirePermission('lead:convert'), async (req, r
 
 pipelineRouter.get('/documents', requirePermission('document:view'), async (req, res, next) => {
   try {
-    const search = queryString(req.query.search)?.toLowerCase()
-    const rows = await prisma.crmDocument.findMany({ orderBy: { updatedAt: 'desc' } })
-    const items = rows
-      .map((row) => ({
-        id: row.id,
-        owner: row.ownerName,
-        type: row.docType,
-        category: row.category || '—',
-        uploadedBy: row.uploadedBy || '—',
-        status: row.status,
-        updated: daysAgoLabel(row.updatedAt),
-      }))
-      .filter((row) => {
-        if (!search) return true
-        return [row.owner, row.type, row.category, row.uploadedBy, row.status]
-          .join(' ')
-          .toLowerCase()
-          .includes(search)
-      })
-    res.json({ items, total: items.length })
+    const { listGlobalLeadDocuments } = await import('../leads/leads.documents')
+    const result = await listGlobalLeadDocuments(req.auth!, {
+      search: queryString(req.query.search),
+      categoryCode: queryString(req.query.categoryCode) || queryString(req.query.category),
+      status: queryString(req.query.status),
+      uploadedById: queryString(req.query.uploadedById),
+      dateFrom: queryString(req.query.dateFrom),
+      dateTo: queryString(req.query.dateTo),
+      verified: queryString(req.query.verified),
+      expired: queryString(req.query.expired),
+      missing: queryString(req.query.missing),
+      page: Number(req.query.page) || 1,
+      limit: Number(req.query.limit) || 50,
+    })
+    res.json({
+      items: result.items.map((row) => ({
+        ...row,
+        updated: daysAgoLabel(new Date(row.updated)),
+      })),
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
   } catch (error) {
     next(error)
   }
@@ -182,27 +185,33 @@ pipelineRouter.get('/documents', requirePermission('document:view'), async (req,
 
 pipelineRouter.get('/payments', requirePermission('payment:view'), async (req, res, next) => {
   try {
-    const search = queryString(req.query.search)?.toLowerCase()
-    const rows = await prisma.payment.findMany({ orderBy: { createdAt: 'desc' } })
-    const items = rows
-      .map((row) => ({
+    const { listPayments } = await import('../payments/payments.service')
+    const result = await listPayments(req.auth!, {
+      search: queryString(req.query.search),
+      methodCode: queryString(req.query.methodCode),
+      status: queryString(req.query.status),
+      page: Number(req.query.page) || 1,
+      limit: Number(req.query.limit) || 100,
+    })
+    res.json({
+      items: result.items.map((row) => ({
         id: row.id,
-        invoice: row.invoice,
-        payer: row.payerName,
-        type: row.type,
-        amount: row.amount,
-        method: row.method || '—',
+        paymentNumber: row.paymentNumber,
+        invoice: row.paymentNumber,
+        payer: row.studentName,
+        type: row.packageName || 'Service Offer',
+        amount: `৳ ${Number(row.amount).toLocaleString('en-BD', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`,
+        method: row.methodName || '—',
         status: row.status,
-        date: row.paidAt ? formatDate(row.paidAt) : formatDate(row.createdAt),
-      }))
-      .filter((row) => {
-        if (!search) return true
-        return [row.invoice, row.payer, row.type, row.method, row.status]
-          .join(' ')
-          .toLowerCase()
-          .includes(search)
-      })
-    res.json({ items, total: items.length })
+        date: row.paymentDate,
+        receiptNumber: row.receipt?.receiptNumber || null,
+        leadCode: row.leadCode,
+        transactionRef: row.transactionRef,
+      })),
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+    })
   } catch (error) {
     next(error)
   }

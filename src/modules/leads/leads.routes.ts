@@ -27,7 +27,17 @@ import {
   updateQualification,
 } from './leads.service'
 import { correctLeadCampaign, correctLeadSource, listAttributionChanges } from './lead-attribution'
-import { deleteLeadDocument, getLeadDocumentFile, listLeadDocuments, uploadLeadDocument } from './leads.documents'
+import {
+  archiveLeadDocument,
+  deleteLeadDocument,
+  getLeadDocumentChecklist,
+  getLeadDocumentFile,
+  getLeadDocumentHistory,
+  listLeadDocuments,
+  rejectLeadDocument,
+  uploadLeadDocument,
+  verifyLeadDocument,
+} from './leads.documents'
 import { createLeadNote, listLeadNotes } from './leads.notes'
 import { handoverLead } from './leads.handover'
 import { previewCountryAssignment } from './leads.assignment'
@@ -243,7 +253,20 @@ leadsRouter.post('/:id/notes', requirePermission('lead:edit'), async (req, res, 
 
 leadsRouter.get('/:id/documents', requirePermission(['document:view', 'lead:view']), async (req, res, next) => {
   try {
-    res.json(await listLeadDocuments(req.auth!, routeParam(req.params.id)))
+    res.json(
+      await listLeadDocuments(req.auth!, routeParam(req.params.id), {
+        archived: req.query.archived === '1' || req.query.archived === 'true',
+        includeHistory: req.query.includeHistory === '1' || req.query.includeHistory === 'true',
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
+leadsRouter.get('/:id/documents/checklist', requirePermission(['document:view', 'lead:view']), async (req, res, next) => {
+  try {
+    res.json(await getLeadDocumentChecklist(req.auth!, routeParam(req.params.id)))
   } catch (error) {
     next(error)
   }
@@ -255,11 +278,7 @@ leadsRouter.post(
   (req, res, next) => {
     upload.single('file')(req, res, (error: unknown) => {
       if (error) {
-        next(
-          httpError.invalidUpload(
-            'The selected document could not be uploaded. Use a PDF, Word, or image file of 5 MB or less.',
-          ),
-        )
+        next(httpError.invalidUpload('File size exceeds the allowed limit.'))
         return
       }
       next()
@@ -279,13 +298,97 @@ leadsRouter.post(
 )
 
 leadsRouter.get(
+  '/:id/documents/:documentId/history',
+  requirePermission(['document:view', 'lead:view']),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await getLeadDocumentHistory(req.auth!, routeParam(req.params.id), routeParam(req.params.documentId)),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.post(
+  '/:id/documents/:documentId/verify',
+  requirePermission('document:verify'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await verifyLeadDocument(
+          req.auth!,
+          routeParam(req.params.id),
+          routeParam(req.params.documentId),
+          body(req),
+          { ipAddress: requestIp(req), userAgent: requestUserAgent(req) },
+        ),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.post(
+  '/:id/documents/:documentId/reject',
+  requirePermission('document:verify'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await rejectLeadDocument(
+          req.auth!,
+          routeParam(req.params.id),
+          routeParam(req.params.documentId),
+          body(req),
+          { ipAddress: requestIp(req), userAgent: requestUserAgent(req) },
+        ),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.post(
+  '/:id/documents/:documentId/archive',
+  requirePermission('document:delete'),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await archiveLeadDocument(req.auth!, routeParam(req.params.id), routeParam(req.params.documentId), {
+          ipAddress: requestIp(req),
+          userAgent: requestUserAgent(req),
+        }),
+      )
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+leadsRouter.get(
   '/:id/documents/:documentId',
   requirePermission(['document:download', 'document:view', 'document:upload']),
   async (req, res, next) => {
     try {
-      const file = await getLeadDocumentFile(req.auth!, routeParam(req.params.id), routeParam(req.params.documentId))
+      const download = req.query.download === '1' || req.query.download === 'true'
+      const file = await getLeadDocumentFile(
+        req.auth!,
+        routeParam(req.params.id),
+        routeParam(req.params.documentId),
+        {
+          ipAddress: requestIp(req),
+          userAgent: requestUserAgent(req),
+          mode: download ? 'download' : 'view',
+        },
+      )
       res.setHeader('Content-Type', file.mimeType)
-      res.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`)
+      res.setHeader(
+        'Content-Disposition',
+        `${download ? 'attachment' : 'inline'}; filename="${file.fileName.replace(/"/g, '')}"`,
+      )
       res.send(file.buffer)
     } catch (error) {
       next(error)
@@ -295,7 +398,7 @@ leadsRouter.get(
 
 leadsRouter.delete(
   '/:id/documents/:documentId',
-  requirePermission(['document:delete', 'document:upload']),
+  requirePermission('document:delete'),
   async (req, res, next) => {
     try {
       res.json(
