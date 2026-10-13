@@ -1,0 +1,22 @@
+# Deps / build output — reinstalled & rebuilt inside the image
+node_modules
+dist
+generated
+
+# Env & secrets — never baked into the image; injected at runtime via compose env_file
+.env
+.env.*
+
+# Local media — lives in the `campusly_uploads` volume, not in the image
+uploads
+logs
+
+# VCS / meta / docs
+.git
+.github
+.vscode
+.idea
+docs
+*.md
+*.log
+.DS_Store

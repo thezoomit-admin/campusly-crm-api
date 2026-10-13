@@ -1,0 +1,51 @@
+# Everything here is driven by environment variables — nothing is hardcoded.
+#
+#   Compose-level variables (${...} below) are read from `.env` next to this file
+#   (Dokploy writes its Environment tab there) or from `--env-file`.
+#   App variables (DATABASE_URL, SMTP_*, CLOUDINARY_*, ...) are passed to the
+#   container from ENV_FILE, which defaults to that same `.env`.
+#
+#   Dokploy:  set the variables in the Environment tab, deploy.
+#   Manual:   ENV_FILE=.env.production docker compose --env-file .env.production \
+#               -f docker-compose.production.yml up -d --build
+#
+# See the "Docker / deployment" block in .env.example for the full list.
+services:
+  app:
+    build:
+      context: .
+      args:
+        NODE_ENV: ${NODE_ENV:-production}
+        PORT: ${PORT:-4000}
+    restart: unless-stopped
+    env_file:
+      - ${ENV_FILE:-.env}
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: ${PORT:-4000}
+    volumes:
+      - campusly_uploads:/app/uploads
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-dokploy-network}
+      - traefik.http.routers.${TRAEFIK_ROUTER:-campusly-crm-api}-web.rule=Host(`${APP_DOMAIN:?APP_DOMAIN is required (e.g. api.example.com)}`)
+      - traefik.http.routers.${TRAEFIK_ROUTER:-campusly-crm-api}-web.entrypoints=web
+      - traefik.http.routers.${TRAEFIK_ROUTER:-campusly-crm-api}-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.${TRAEFIK_ROUTER:-campusly-crm-api}-websecure.rule=Host(`${APP_DOMAIN}`)
+      - traefik.http.routers.${TRAEFIK_ROUTER:-campusly-crm-api}-websecure.entrypoints=websecure
+      - traefik.http.routers.${TRAEFIK_ROUTER:-campusly-crm-api}-websecure.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      - traefik.http.services.${TRAEFIK_ROUTER:-campusly-crm-api}-websecure.loadbalancer.server.port=${PORT:-4000}
+      - traefik.http.routers.${TRAEFIK_ROUTER:-campusly-crm-api}-websecure.service=${TRAEFIK_ROUTER:-campusly-crm-api}-websecure
+    networks:
+      - traefik
+      - default
+
+# The database is external (Neon Postgres) — the app reaches it via DATABASE_URL / DIRECT_URL.
+
+volumes:
+  campusly_uploads:
+
+networks:
+  traefik:
+    name: ${TRAEFIK_NETWORK:-dokploy-network}
+    external: true
