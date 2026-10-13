@@ -378,6 +378,37 @@ export async function createFollowUp(
     include: { lead: { select: { id: true, code: true, name: true } } },
   });
 
+  // Close prior open follow-ups in the same lane so getLead's nextFollowUp
+  // (earliest open dueAt) reflects this new schedule in the countdown UI.
+  // Meetings and non-meetings stay independent.
+  const superseded = await prisma.followUp.findMany({
+    where: {
+      leadId: lead.id,
+      id: { not: followUp.id },
+      status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
+      ...(type === "Meeting"
+        ? { type: "Meeting" }
+        : { type: { not: "Meeting" } }),
+    },
+    select: { id: true },
+  });
+  if (superseded.length > 0) {
+    const reason = `Superseded by new ${type} follow-up`;
+    await prisma.followUp.updateMany({
+      where: { id: { in: superseded.map((item) => item.id) } },
+      data: {
+        status: "Cancelled",
+        cancelReason: reason,
+        cancelledAt: new Date(),
+        cancelledById: auth.user.id,
+        cancelledByName: auth.user.fullName,
+      },
+    });
+    await Promise.all(
+      superseded.map((item) => deactivateFollowUpNotifications(item.id)),
+    );
+  }
+
   await createScheduledActivity(auth, {
     leadId: lead.id,
     leadName: lead.name,
@@ -395,7 +426,13 @@ export async function createFollowUp(
     entityId: lead.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
-    metadata: { followUpId: followUp.id, type, purpose, nextAction },
+    metadata: {
+      followUpId: followUp.id,
+      type,
+      purpose,
+      nextAction,
+      supersededFollowUpIds: superseded.map((item) => item.id),
+    },
   });
 
   return { followUp: serializeFollowUp(followUp) };
