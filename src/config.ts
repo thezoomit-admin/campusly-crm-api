@@ -46,6 +46,13 @@ export const config = {
   lockMinutes: Number(process.env.LOGIN_LOCK_MINUTES) || 15,
   sessionHours: Number(process.env.SESSION_HOURS) || 12,
   rememberMeDays: Number(process.env.REMEMBER_ME_DAYS) || 30,
+  /**
+   * SameSite for the session cookie. Use `none` when the web app is served from a
+   * different site than the API (cross-site requests drop `lax` cookies).
+   */
+  sessionCookieSameSite: (process.env.SESSION_COOKIE_SAMESITE || '').trim().toLowerCase() === 'none'
+    ? ('none' as const)
+    : ('lax' as const),
   resetTokenHours: Number(process.env.RESET_TOKEN_HOURS) || 2,
   /** How long account-invite / set-password links remain valid. */
   inviteTokenHours: Number(process.env.INVITE_TOKEN_HOURS) || 72,

@@ -60,8 +60,8 @@ export function sessionDurationMs(rememberMe: boolean) {
 export function cookieOptions(maxAge: number) {
   return {
     httpOnly: true,
-    sameSite: "lax" as const,
-    secure: config.isProduction,
+    sameSite: config.sessionCookieSameSite,
+    secure: config.isProduction || config.sessionCookieSameSite === "none",
     path: "/",
     maxAge,
   };
@@ -70,8 +70,8 @@ export function cookieOptions(maxAge: number) {
 export function clearCookieOptions() {
   return {
     httpOnly: true,
-    sameSite: "lax" as const,
-    secure: config.isProduction,
+    sameSite: config.sessionCookieSameSite,
+    secure: config.isProduction || config.sessionCookieSameSite === "none",
     path: "/",
   };
 }
