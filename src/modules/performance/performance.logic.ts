@@ -21,6 +21,15 @@ export type Person = {
   employeeId: string | null
   employeeCode: string | null
   name: string
+  photoUrl: string | null
+  email: string | null
+  phone: string | null
+  designation: string | null
+  employmentType: string | null
+  employmentStatus: string | null
+  joiningDate: string | null
+  teamName: string | null
+  reportingManager: string | null
   departmentId: string | null
   departmentName: string
   canCollect: boolean
@@ -484,6 +493,7 @@ export function aggregatePerformance(input: {
       employeeId: person.employeeId,
       employeeCode: person.employeeCode,
       name: person.name,
+      photoUrl: person.photoUrl,
       departmentId: person.departmentId,
       departmentName: person.departmentName,
       ...metrics,
