@@ -80,6 +80,22 @@ export function createApp() {
   app.use(cookieParser());
   app.use(attachSession);
 
+  app.get("/", (_req, res) => {
+    res.json({
+      success: true,
+      message: "Campusly CRM API is running successfully.",
+      statusCode: 200,
+      data: {
+        service: "Campusly CRM API",
+        environment: config.env,
+        timestamp: new Date().toISOString(),
+      },
+      links: {
+        health: "/api/health",
+      },
+    });
+  });
+
   app.use("/api/health", healthRouter);
   app.use("/api/public", publicWebsiteRouter);
   app.use("/api/auth", authRouter);
