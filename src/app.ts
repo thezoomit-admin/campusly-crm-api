@@ -3,31 +3,24 @@ import cors from "cors";
 import express from "express";
 import { config } from "./config";
 import { HttpError } from "./lib/http-error";
-import { attachSession } from "./modules/auth/attach-session.middleware";
-import { authRouter } from "./modules/auth/auth.routes";
 import { activitiesRouter } from "./modules/activities/activities.routes";
 import { auditRouter } from "./modules/audit/audit.routes";
-import { healthRouter } from "./modules/health/health.routes";
+import { attachSession } from "./modules/auth/attach-session.middleware";
+import { authRouter } from "./modules/auth/auth.routes";
+import { campaignsRouter } from "./modules/campaigns/campaigns.routes";
+import { communicationsRouter } from "./modules/communications/communications.routes";
+import { emailRouter } from "./modules/email/email.routes";
 import { employeesRouter } from "./modules/employees/employees.routes";
+import { filesRouter } from "./modules/files/files.routes";
+import { followUpsRouter } from "./modules/follow-ups/follow-ups.routes";
+import { healthRouter } from "./modules/health/health.routes";
+import { publicWebsiteRouter } from "./modules/integrations/public-website.routes";
+import { webhooksRouter } from "./modules/integrations/webhooks.routes";
+import { leadsRouter } from "./modules/leads/leads.routes";
 import { masterDataRouter } from "./modules/master-data/master-data.routes";
 import { meRouter } from "./modules/me/me.routes";
-import { permissionsRouter } from "./modules/permissions/permissions.routes";
-import { rolesRouter } from "./modules/roles/roles.routes";
-import { searchRouter } from "./modules/search/search.routes";
-import { usersRouter } from "./modules/users/users.routes";
-import { leadsRouter } from "./modules/leads/leads.routes";
-import { followUpsRouter } from "./modules/follow-ups/follow-ups.routes";
-import { notificationsRouter } from "./modules/notifications/notifications.routes";
-import { webhooksRouter } from "./modules/integrations/webhooks.routes";
-import { publicWebsiteRouter } from "./modules/integrations/public-website.routes";
-import { pipelineRouter } from "./modules/pipeline/pipeline.routes";
-import { communicationsRouter } from "./modules/communications/communications.routes";
-import { campaignsRouter } from "./modules/campaigns/campaigns.routes";
-import { whatsappRouter } from "./modules/whatsapp/whatsapp.routes";
-import { whatsappWebhookRouter } from "./modules/whatsapp/whatsapp.webhook";
-import { emailRouter } from "./modules/email/email.routes";
 import { metaLeadsRouter } from "./modules/meta-leads/meta-leads.routes";
-import { serviceItemsRouter } from "./modules/service-items/service-items.routes";
+import { notificationsRouter } from "./modules/notifications/notifications.routes";
 import { packagesRouter } from "./modules/packages/packages.routes";
 import { serviceOffersRouter } from "./modules/packages/service-offers.routes";
 import {
@@ -35,8 +28,15 @@ import {
   paymentsRouter,
   receiptsRouter,
 } from "./modules/payments/payments.routes";
-import { filesRouter } from "./modules/files/files.routes";
 import { performanceRouter } from "./modules/performance/performance.routes";
+import { permissionsRouter } from "./modules/permissions/permissions.routes";
+import { pipelineRouter } from "./modules/pipeline/pipeline.routes";
+import { rolesRouter } from "./modules/roles/roles.routes";
+import { searchRouter } from "./modules/search/search.routes";
+import { serviceItemsRouter } from "./modules/service-items/service-items.routes";
+import { usersRouter } from "./modules/users/users.routes";
+import { whatsappRouter } from "./modules/whatsapp/whatsapp.routes";
+import { whatsappWebhookRouter } from "./modules/whatsapp/whatsapp.webhook";
 
 export function createApp() {
   const app = express();
@@ -44,6 +44,8 @@ export function createApp() {
   const allowedOrigins = new Set([
     ...config.clientOrigins,
     ...config.websiteOrigins,
+    "https://crm.campusly.com",
+    "https://campusly-crm.vercel.app",
   ]);
 
   app.use(
