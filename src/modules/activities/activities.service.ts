@@ -749,50 +749,51 @@ export async function createActivity(
   });
 
   let nextFollowUp: { id: string } | null = null;
-  if (createNext && nextDate && input.relatedId) {
+  if (createNext && nextDate && nextAction && input.relatedId) {
     const lead = await prisma.lead.findUnique({
       where: { id: input.relatedId },
     });
     if (lead) {
-      const { computeReminderAt } =
-        await import("../follow-ups/follow-ups.utils");
-      const reminder = "30 Minutes Before";
-      const reminderAt = computeReminderAt(nextDate, reminder);
-      const followUp = await prisma.followUp.create({
-        data: {
+      const followUpType =
+        input.nextFollowUpType?.trim() || followUpTypeFromActivity(type);
+      const { scheduleLeadFollowUp } = await import(
+        "../follow-ups/follow-ups.service"
+      );
+      const scheduled = await scheduleLeadFollowUp(
+        auth,
+        {
           leadId: lead.id,
-          contactName: lead.name,
-          type:
-            input.nextFollowUpType?.trim() || followUpTypeFromActivity(type),
+          leadName: lead.name,
+          leadPriority: lead.priority,
+          ownerId: lead.ownerId,
+          ownerName: lead.ownerName,
+          type: followUpType,
           dueAt: nextDate,
           priority:
             input.nextFollowUpPriority?.trim() || lead.priority || "Medium",
-          status: nextDate.getTime() < Date.now() ? "Overdue" : "Pending",
           purpose:
             type === "COUNSELLING" ? "Counselling" : "Information Sharing",
           notes: input.notes?.trim() || null,
           nextAction,
-          reminder,
-          reminderAt,
-          reminderStatus: reminderAt ? "Pending" : "Skipped",
-          ownerId: lead.ownerId || auth.user.id,
-          ownerName: lead.ownerName || auth.user.fullName,
+          reminder: "30 Minutes Before",
           source: "Manual",
           sourceReason: `Created from ${ACTIVITY_TYPE_LABELS[type]} activity`,
+          skipScheduledActivity: true,
         },
-      });
-      nextFollowUp = { id: followUp.id };
+        meta,
+      );
+      nextFollowUp = { id: scheduled.followUp.id };
       await writeAuditLog({
         userId: auth.user.id,
-        action: "FOLLOW_UP_CREATED",
+        action: "FOLLOW_UP_LINKED_TO_ACTIVITY",
         entityType: "lead",
         entityId: lead.id,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
         metadata: {
-          followUpId: followUp.id,
+          followUpId: scheduled.followUp.id,
           fromActivityId: row.id,
-          type: followUp.type,
+          type: followUpType,
         },
       });
     }

@@ -1920,6 +1920,22 @@ export async function updateLeadStatus(
   if (next.code === "QUALIFIED" && missingQualifiedData(currentLead)) {
     fields.statusCode = STATUS_MESSAGES.qualifiedData;
   }
+
+  const nextFollowUpAtRaw = asString(body.nextFollowUpAt);
+  let nextFollowUpDueAt: Date | null = null;
+  if (nextFollowUpAtRaw) {
+    nextFollowUpDueAt = new Date(nextFollowUpAtRaw);
+    if (Number.isNaN(nextFollowUpDueAt.getTime())) {
+      fields.nextFollowUpAt = "Please choose a valid next follow-up date.";
+    } else if (
+      nextFollowUpDueAt.getHours() === 0 &&
+      nextFollowUpDueAt.getMinutes() === 0 &&
+      nextFollowUpDueAt.getSeconds() === 0
+    ) {
+      // Date-only values often arrive at midnight — default to 10:00 local.
+      nextFollowUpDueAt.setHours(10, 0, 0, 0);
+    }
+  }
   throwIfInvalid(fields);
 
   try {
@@ -2023,6 +2039,57 @@ export async function updateLeadStatus(
       });
     } catch (error) {
       console.error("[notifications] Status notification failed:", error);
+    }
+
+    // Status-change form requires a next follow-up date — schedule it here so the
+    // Follow-ups table always gets a row (frontend used to create it optionally).
+    if (nextFollowUpDueAt) {
+      const channels = Array.isArray(body.channels)
+        ? body.channels.map((item) => String(item).toUpperCase())
+        : typeof body.channels === "string"
+          ? body.channels.split(",").map((item) => item.trim().toUpperCase())
+          : [];
+      const followUpType =
+        asString(body.followUpType) ||
+        (channels.includes("CALL")
+          ? "Call"
+          : channels.includes("WHATSAPP")
+            ? "WhatsApp"
+            : channels.includes("EMAIL")
+              ? "Email"
+              : channels.includes("SMS")
+                ? "SMS"
+                : "Call");
+
+      try {
+        const { scheduleLeadFollowUp } = await import(
+          "../follow-ups/follow-ups.service"
+        );
+        await scheduleLeadFollowUp(
+          auth,
+          {
+            leadId: lead.id,
+            leadName: lead.name,
+            leadPriority: lead.priority,
+            ownerId: lead.ownerId,
+            ownerName: lead.ownerName,
+            type: followUpType,
+            dueAt: nextFollowUpDueAt,
+            priority: lead.priority || "Medium",
+            purpose: "Other",
+            purposeOther: "Status change follow-up",
+            notes: remarks || null,
+            nextAction:
+              remarks.slice(0, 200) || "Follow up after status change",
+            reminder: "No Reminder",
+            source: "Manual",
+            sourceReason: "Next follow-up updated with status change",
+          },
+          meta,
+        );
+      } catch (error) {
+        console.error("[follow-ups] Status-change follow-up failed:", error);
+      }
     }
 
     return getLead(auth, id);

@@ -246,6 +246,17 @@ async function createScheduledActivity(
   });
 }
 
+function followUpLeadAccessWhere(
+  auth: AuthContext,
+): Prisma.FollowUpWhereInput {
+  const leadScope = leadReadableWhere(auth);
+  // Prisma treats `{ lead: {} }` as matching *no* related rows, so ALL-scope
+  // users would only see orphan follow-ups (leadId null) and miss every
+  // lead-linked date shown on the Leads table.
+  if (Object.keys(leadScope).length === 0) return {};
+  return { OR: [{ leadId: null }, { lead: leadScope }] };
+}
+
 export async function listFollowUps(
   auth: AuthContext,
   query: { search?: string; leadId?: string; status?: string },
@@ -254,13 +265,10 @@ export async function listFollowUps(
     throw httpError.accessDenied();
   }
 
-  const leadScope = leadReadableWhere(auth);
   const where: Prisma.FollowUpWhereInput = {
     AND: [
       query.leadId ? { leadId: query.leadId } : {},
-      {
-        OR: [{ leadId: null }, { lead: leadScope }],
-      },
+      followUpLeadAccessWhere(auth),
       query.status ? { status: query.status } : {},
     ],
   };
@@ -274,6 +282,7 @@ export async function listFollowUps(
   });
 
   const search = query.search?.trim().toLowerCase();
+  const openStatuses = new Set(["Pending", "Due Soon", "Overdue"]);
   const items = rows
     .map((row) => serializeFollowUp(row))
     .filter((row) => {
@@ -287,11 +296,22 @@ export async function listFollowUps(
         row.purpose,
         row.nextAction,
         row.lead?.code,
+        row.lead?.name,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(search);
+    })
+    // Open lead pipeline follow-ups first (matches Leads "Follow-up" column), then history.
+    .sort((a, b) => {
+      const aOpen = openStatuses.has(a.status) ? 0 : 1;
+      const bOpen = openStatuses.has(b.status) ? 0 : 1;
+      if (aOpen !== bOpen) return aOpen - bOpen;
+      const aDue = a.dueAt ? new Date(a.dueAt).getTime() : Number.POSITIVE_INFINITY;
+      const bDue = b.dueAt ? new Date(b.dueAt).getTime() : Number.POSITIVE_INFINITY;
+      if (aDue !== bDue) return aDue - bDue;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 
   return { items, total: items.length };
@@ -314,66 +334,71 @@ export async function listLeadFollowUps(auth: AuthContext, leadId: string) {
   };
 }
 
-export async function createFollowUp(
+type ScheduleLeadFollowUpInput = {
+  leadId: string
+  leadName: string
+  leadPriority?: string | null
+  ownerId?: string | null
+  ownerName?: string | null
+  type?: string
+  dueAt: Date
+  priority?: string
+  purpose?: string
+  purposeOther?: string | null
+  notes?: string | null
+  nextAction: string
+  reminder?: string
+  source?: string
+  sourceReason?: string | null
+  /** When true, skip the extra FOLLOW_UP activity row (e.g. already logging another activity). */
+  skipScheduledActivity?: boolean
+}
+
+/**
+ * Creates a follow-up and cancels other open follow-ups in the same lane.
+ * Used by status-change and other lead workflows (caller enforces access).
+ */
+export async function scheduleLeadFollowUp(
   auth: AuthContext,
-  body: Record<string, unknown>,
+  input: ScheduleLeadFollowUpInput,
   meta: AuditMeta,
 ) {
-  if (!hasPermission(auth.permissions, "follow_up:create")) {
-    throw httpError.accessDenied();
-  }
-
-  const leadId = asString(body.leadId);
-  if (!leadId) {
-    throw httpError.validation(
-      { leadId: "Lead is required." },
-      "Lead is required.",
-    );
-  }
-
-  const lead = await assertCanViewLead(auth, leadId);
-  const dueAt = requireDueAt(body.dueAt);
-  const type = normalizeType(body.type);
-  const purpose = normalizePurpose(body.purpose);
+  const type = normalizeType(input.type || "Call");
+  const purpose = normalizePurpose(input.purpose || "Other");
   const purposeOther =
-    purpose === "Other" ? asOptionalString(body.purposeOther, 500) : null;
-  if (purpose === "Other" && !purposeOther) {
-    throw httpError.validation(
-      { purposeOther: "Please provide a reason." },
-      "Please provide a reason.",
-    );
-  }
-
-  const nextAction = asOptionalString(body.nextAction, 500);
-  if (!nextAction) {
-    throw httpError.validation(
-      { nextAction: "Please enter the next action." },
-      "Please enter the next action.",
-    );
-  }
-
-  const reminder = normalizeReminder(body.reminder);
-  const reminderAt = reminderInstant(dueAt, reminder);
+    purpose === "Other"
+      ? asOptionalString(input.purposeOther, 500) ||
+        asOptionalString(input.sourceReason, 500) ||
+        "Scheduled with lead update"
+      : null;
+  const nextAction =
+    asOptionalString(input.nextAction, 500) || "Follow up with lead";
+  const reminder = normalizeReminder(input.reminder || "No Reminder");
+  const reminderAt = reminderInstant(input.dueAt, reminder);
+  const dueAt = input.dueAt;
 
   const followUp = await prisma.followUp.create({
     data: {
-      leadId: lead.id,
-      contactName: lead.name,
+      leadId: input.leadId,
+      contactName: input.leadName,
       type,
       dueAt,
-      priority: normalizePriority(body.priority, lead.priority || "Medium"),
+      priority: normalizePriority(
+        input.priority,
+        input.leadPriority || "Medium",
+      ),
       status: dueAt.getTime() < Date.now() ? "Overdue" : "Pending",
       purpose,
       purposeOther,
-      notes: asOptionalString(body.notes, 1000),
+      notes: asOptionalString(input.notes, 1000),
       nextAction,
       reminder,
       reminderAt,
       reminderStatus: reminderAt ? "Pending" : "Skipped",
-      ownerId: lead.ownerId || auth.user.id,
-      ownerName: lead.ownerName || auth.user.fullName,
-      source: asOptionalString(body.source, 40) || "Manual",
-      sourceReason: asOptionalString(body.sourceReason, 200),
+      ownerId: input.ownerId || auth.user.id,
+      ownerName: input.ownerName || auth.user.fullName,
+      source: asOptionalString(input.source, 40) || "Manual",
+      sourceReason: asOptionalString(input.sourceReason, 200),
     },
     include: { lead: { select: { id: true, code: true, name: true } } },
   });
@@ -383,7 +408,7 @@ export async function createFollowUp(
   // Meetings and non-meetings stay independent.
   const superseded = await prisma.followUp.findMany({
     where: {
-      leadId: lead.id,
+      leadId: input.leadId,
       id: { not: followUp.id },
       status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
       ...(type === "Meeting"
@@ -409,21 +434,23 @@ export async function createFollowUp(
     );
   }
 
-  await createScheduledActivity(auth, {
-    leadId: lead.id,
-    leadName: lead.name,
-    type,
-    dueAt,
-    notes: `Follow-up scheduled (${type}) — ${nextAction}`,
-    nextAction,
-    meta,
-  });
+  if (!input.skipScheduledActivity) {
+    await createScheduledActivity(auth, {
+      leadId: input.leadId,
+      leadName: input.leadName,
+      type,
+      dueAt,
+      notes: `Follow-up scheduled (${type}) — ${nextAction}`,
+      nextAction,
+      meta,
+    });
+  }
 
   await writeAuditLog({
     userId: auth.user.id,
     action: "FOLLOW_UP_CREATED",
     entityType: "lead",
-    entityId: lead.id,
+    entityId: input.leadId,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: {
@@ -436,6 +463,66 @@ export async function createFollowUp(
   });
 
   return { followUp: serializeFollowUp(followUp) };
+}
+
+export async function createFollowUp(
+  auth: AuthContext,
+  body: Record<string, unknown>,
+  meta: AuditMeta,
+) {
+  if (!hasPermission(auth.permissions, "follow_up:create")) {
+    throw httpError.accessDenied();
+  }
+
+  const leadId = asString(body.leadId);
+  if (!leadId) {
+    throw httpError.validation(
+      { leadId: "Lead is required." },
+      "Lead is required.",
+    );
+  }
+
+  const lead = await assertCanViewLead(auth, leadId);
+  const dueAt = requireDueAt(body.dueAt);
+  const purpose = normalizePurpose(body.purpose);
+  const purposeOther =
+    purpose === "Other" ? asOptionalString(body.purposeOther, 500) : null;
+  if (purpose === "Other" && !purposeOther) {
+    throw httpError.validation(
+      { purposeOther: "Please provide a reason." },
+      "Please provide a reason.",
+    );
+  }
+
+  const nextAction = asOptionalString(body.nextAction, 500);
+  if (!nextAction) {
+    throw httpError.validation(
+      { nextAction: "Please enter the next action." },
+      "Please enter the next action.",
+    );
+  }
+
+  return scheduleLeadFollowUp(
+    auth,
+    {
+      leadId: lead.id,
+      leadName: lead.name,
+      leadPriority: lead.priority,
+      ownerId: lead.ownerId,
+      ownerName: lead.ownerName,
+      type: asString(body.type) || "Call",
+      dueAt,
+      priority: asString(body.priority) || undefined,
+      purpose: purpose ?? undefined,
+      purposeOther,
+      notes: asOptionalString(body.notes, 1000),
+      nextAction,
+      reminder: asString(body.reminder) || undefined,
+      source: asOptionalString(body.source, 40) || undefined,
+      sourceReason: asOptionalString(body.sourceReason, 200),
+    },
+    meta,
+  );
 }
 
 export async function completeFollowUp(
