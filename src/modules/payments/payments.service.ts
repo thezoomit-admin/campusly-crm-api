@@ -35,6 +35,9 @@ type Fields = Record<string, string>;
 
 const userRef = { select: { id: true, fullName: true } };
 
+/** Neon/pooler latency makes payment flows exceed Prisma's 5s default. */
+const PAYMENT_TX = { maxWait: 10_000, timeout: 30_000 } as const;
+
 function money(value: { toString(): string } | string | number) {
   return Number(value).toFixed(2);
 }
@@ -84,11 +87,11 @@ export async function sumCompletedPaidCents(
   tx: Prisma.TransactionClient | typeof prisma,
   offerId: string,
 ) {
-  const rows = await tx.payment.findMany({
+  const total = await tx.payment.aggregate({
     where: { serviceOfferId: offerId, status: { in: [...COUNTING_STATUSES] } },
-    select: { amount: true },
+    _sum: { amount: true },
   });
-  return rows.reduce((sum, row) => sum + cents(row.amount), 0);
+  return cents(total._sum.amount || 0);
 }
 
 export async function syncOfferPaymentFromPayments(
@@ -180,6 +183,53 @@ type AllocationInput = {
   amount: number;
 };
 
+async function paidCentsByInstallmentIds(
+  tx: Prisma.TransactionClient,
+  installmentIds: string[],
+) {
+  const paid = new Map<string, number>();
+  if (!installmentIds.length) return paid;
+  const groups = await tx.paymentAllocation.groupBy({
+    by: ["installmentId"],
+    where: {
+      installmentId: { in: installmentIds },
+      payment: { status: { in: [...COUNTING_STATUSES] } },
+    },
+    _sum: { amount: true },
+  });
+  for (const row of groups) {
+    if (!row.installmentId) continue;
+    paid.set(row.installmentId, cents(row._sum.amount || 0));
+  }
+  return paid;
+}
+
+async function setInstallmentPaidStatus(
+  tx: Prisma.TransactionClient,
+  installmentId: string,
+  totalCents: number,
+  paidCents: number,
+  actorId: string,
+  paidAt: Date,
+) {
+  if (paidCents >= totalCents) {
+    await tx.serviceOfferInstallment.update({
+      where: { id: installmentId },
+      data: { status: "PAID", paidAt, paidById: actorId },
+    });
+  } else if (paidCents > 0) {
+    await tx.serviceOfferInstallment.update({
+      where: { id: installmentId },
+      data: { status: "PARTIAL", paidAt: null, paidById: null },
+    });
+  } else {
+    await tx.serviceOfferInstallment.update({
+      where: { id: installmentId },
+      data: { status: "PENDING", paidAt: null, paidById: null },
+    });
+  }
+}
+
 async function applyOldestDueFirstAllocations(
   tx: Prisma.TransactionClient,
   input: {
@@ -199,20 +249,34 @@ async function applyOldestDueFirstAllocations(
         PAYMENT_MESSAGES.allocationMismatch,
       );
     }
-    for (const row of input.manual) {
-      await tx.paymentAllocation.create({
-        data: {
-          paymentId: input.paymentId,
-          installmentId: row.installmentId || null,
-          offerItemId: row.offerItemId || null,
-          label: row.label?.trim() || "Allocation",
-          amount: money(row.amount),
-        },
+    await tx.paymentAllocation.createMany({
+      data: input.manual.map((row) => ({
+        paymentId: input.paymentId,
+        installmentId: row.installmentId || null,
+        offerItemId: row.offerItemId || null,
+        label: row.label?.trim() || "Allocation",
+        amount: money(row.amount),
+      })),
+    });
+    const touchedIds = [
+      ...new Set(
+        input.manual
+          .map((row) => row.installmentId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (touchedIds.length) {
+      const installments = await tx.serviceOfferInstallment.findMany({
+        where: { id: { in: touchedIds } },
+        select: { id: true, amount: true },
       });
-      if (row.installmentId) {
-        await refreshInstallmentFromAllocations(
+      const paidMap = await paidCentsByInstallmentIds(tx, touchedIds);
+      for (const installment of installments) {
+        await setInstallmentPaidStatus(
           tx,
-          row.installmentId,
+          installment.id,
+          cents(installment.amount),
+          paidMap.get(installment.id) || 0,
           input.actorId,
           input.paidAt,
         );
@@ -224,47 +288,67 @@ async function applyOldestDueFirstAllocations(
   const installments = await tx.serviceOfferInstallment.findMany({
     where: { serviceOfferId: input.offerId },
     orderBy: [{ dueDate: "asc" }, { sequence: "asc" }],
+    select: {
+      id: true,
+      amount: true,
+      purpose: true,
+      sequence: true,
+    },
   });
+  const paidMap = await paidCentsByInstallmentIds(
+    tx,
+    installments.map((row) => row.id),
+  );
 
   let remaining = input.paymentAmountCents;
+  const allocationRows: Prisma.PaymentAllocationCreateManyInput[] = [];
+  const statusUpdates: Array<{
+    id: string;
+    totalCents: number;
+    paidCents: number;
+  }> = [];
+
   for (const installment of installments) {
     if (remaining <= 0) break;
-    const allocated = await tx.paymentAllocation.aggregate({
-      where: {
-        installmentId: installment.id,
-        payment: { status: { in: [...COUNTING_STATUSES] } },
-      },
-      _sum: { amount: true },
-    });
-    const already = cents(allocated._sum.amount || 0);
-    const need = Math.max(0, cents(installment.amount) - already);
+    const already = paidMap.get(installment.id) || 0;
+    const totalCents = cents(installment.amount);
+    const need = Math.max(0, totalCents - already);
     if (need <= 0) continue;
     const take = Math.min(remaining, need);
-    await tx.paymentAllocation.create({
-      data: {
-        paymentId: input.paymentId,
-        installmentId: installment.id,
-        label: installment.purpose || `Installment ${installment.sequence}`,
-        amount: money(fromCents(take)),
-      },
+    allocationRows.push({
+      paymentId: input.paymentId,
+      installmentId: installment.id,
+      label: installment.purpose || `Installment ${installment.sequence}`,
+      amount: money(fromCents(take)),
     });
-    await refreshInstallmentFromAllocations(
-      tx,
-      installment.id,
-      input.actorId,
-      input.paidAt,
-    );
+    statusUpdates.push({
+      id: installment.id,
+      totalCents,
+      paidCents: already + take,
+    });
     remaining -= take;
   }
 
   if (remaining > 0) {
-    await tx.paymentAllocation.create({
-      data: {
-        paymentId: input.paymentId,
-        label: "Offer payment",
-        amount: money(fromCents(remaining)),
-      },
+    allocationRows.push({
+      paymentId: input.paymentId,
+      label: "Offer payment",
+      amount: money(fromCents(remaining)),
     });
+  }
+
+  if (allocationRows.length) {
+    await tx.paymentAllocation.createMany({ data: allocationRows });
+  }
+  for (const update of statusUpdates) {
+    await setInstallmentPaidStatus(
+      tx,
+      update.id,
+      update.totalCents,
+      update.paidCents,
+      input.actorId,
+      input.paidAt,
+    );
   }
 }
 
@@ -276,33 +360,18 @@ async function refreshInstallmentFromAllocations(
 ) {
   const installment = await tx.serviceOfferInstallment.findUnique({
     where: { id: installmentId },
+    select: { id: true, amount: true },
   });
   if (!installment) return;
-  const allocated = await tx.paymentAllocation.aggregate({
-    where: {
-      installmentId,
-      payment: { status: { in: [...COUNTING_STATUSES] } },
-    },
-    _sum: { amount: true },
-  });
-  const paid = cents(allocated._sum.amount || 0);
-  const total = cents(installment.amount);
-  if (paid >= total) {
-    await tx.serviceOfferInstallment.update({
-      where: { id: installmentId },
-      data: { status: "PAID", paidAt, paidById: actorId },
-    });
-  } else if (paid > 0) {
-    await tx.serviceOfferInstallment.update({
-      where: { id: installmentId },
-      data: { status: "PARTIAL", paidAt: null, paidById: null },
-    });
-  } else {
-    await tx.serviceOfferInstallment.update({
-      where: { id: installmentId },
-      data: { status: "PENDING", paidAt: null, paidById: null },
-    });
-  }
+  const paidMap = await paidCentsByInstallmentIds(tx, [installmentId]);
+  await setInstallmentPaidStatus(
+    tx,
+    installmentId,
+    cents(installment.amount),
+    paidMap.get(installmentId) || 0,
+    actorId,
+    paidAt,
+  );
 }
 
 async function rebuildInstallmentsForOffer(
@@ -312,10 +381,23 @@ async function rebuildInstallmentsForOffer(
 ) {
   const installments = await tx.serviceOfferInstallment.findMany({
     where: { serviceOfferId: offerId },
+    select: { id: true, amount: true },
   });
+  if (!installments.length) return;
   const now = new Date();
+  const paidMap = await paidCentsByInstallmentIds(
+    tx,
+    installments.map((row) => row.id),
+  );
   for (const item of installments) {
-    await refreshInstallmentFromAllocations(tx, item.id, actorId, now);
+    await setInstallmentPaidStatus(
+      tx,
+      item.id,
+      cents(item.amount),
+      paidMap.get(item.id) || 0,
+      actorId,
+      now,
+    );
   }
 }
 
@@ -479,7 +561,7 @@ export async function generateReceiptForPayment(
           generatedById: auth.user.id,
         },
       });
-    });
+    }, PAYMENT_TX);
 
     await writeAuditLog({
       userId: auth.user.id,
@@ -820,7 +902,7 @@ export async function createOfferPayment(
       }
 
       return { paymentId: payment.id, receiptNumber };
-    });
+    }, PAYMENT_TX);
 
     await writeAuditLog({
       userId: auth.user.id,
@@ -1065,7 +1147,7 @@ export async function cancelPayment(
           reason,
         },
       });
-    });
+    }, PAYMENT_TX);
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(500, PAYMENT_MESSAGES.cancelError, "CANCEL_ERROR");
@@ -1162,7 +1244,7 @@ export async function reversePayment(
           reason,
         },
       });
-    });
+    }, PAYMENT_TX);
   } catch (error) {
     if (error instanceof HttpError) throw error;
     throw new HttpError(500, PAYMENT_MESSAGES.reverseError, "REVERSE_ERROR");

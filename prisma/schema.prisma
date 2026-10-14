@@ -163,6 +163,9 @@ model User {
   statusHistory                 LeadStatusHistory[]
   defaultCountryRules           CountryAssignmentRule[]     @relation("CountryRuleDefaultOwner")
   counselledApplications        Application[]               @relation("ApplicationCounsellor")
+  applicationsCreated           Application[]               @relation("ApplicationCreatedBy")
+  applicationsUpdated           Application[]               @relation("ApplicationUpdatedBy")
+  applicationStatusChanges      ApplicationStatusHistory[]  @relation("ApplicationStatusHistoryActor")
   counselledStudents            Student[]                   @relation("StudentCounsellor")
   uploadedDocuments             CrmDocument[]               @relation("DocumentUploader")
   uploadedLeadDocuments         LeadDocument[]              @relation("LeadDocumentUploader")
@@ -994,6 +997,8 @@ model Lead {
   documents               LeadDocument[]
   payments                Payment[]
   crmFile                 CrmFile?
+  applications            Application[]
+  student                 Student?
 
   @@index([status])
   @@index([ownerId])
@@ -1214,36 +1219,70 @@ model LeadStatusHistory {
 model Application {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code           String    @unique
+  leadId         String?   @map("lead_id") @db.Uuid
+  studentId      String?   @map("student_id") @db.Uuid
   applicantName  String    @map("applicant_name")
+  countryCode    String?   @map("country_code")
+  countryName    String?   @map("country_name")
   university     String?
   program        String?
   intake         String?
   counsellorName String?   @map("counsellor_name")
   counsellorId   String?   @map("counsellor_id") @db.Uuid
-  status         String
+  status         String    @default("Documents Pending")
+  remarks        String?   @db.Text
   submittedAt    DateTime? @map("submitted_at")
+  createdById    String?   @map("created_by_id") @db.Uuid
+  updatedById    String?   @map("updated_by_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  lead           Lead?     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  student        Student?  @relation(fields: [studentId], references: [id], onDelete: SetNull)
   counsellor     User?     @relation("ApplicationCounsellor", fields: [counsellorId], references: [id], onDelete: SetNull)
+  createdBy      User?     @relation("ApplicationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy      User?     @relation("ApplicationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  statusHistory  ApplicationStatusHistory[]
 
+  @@index([leadId])
+  @@index([studentId])
   @@index([status])
   @@index([counsellorId])
   @@map("applications")
 }
 
+model ApplicationStatusHistory {
+  id                 String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId      String      @map("application_id") @db.Uuid
+  previousStatus     String?     @map("previous_status")
+  newStatus          String      @map("new_status")
+  remarks            String?     @db.Text
+  createdById        String?     @map("created_by_id") @db.Uuid
+  createdAt          DateTime    @default(now()) @map("created_at")
+  application        Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdBy          User?       @relation("ApplicationStatusHistoryActor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+  @@map("application_status_history")
+}
+
 model Student {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId         String?   @unique @map("lead_id") @db.Uuid
   studentCode    String    @unique @map("student_code")
   name           String
+  phone          String?
+  email          String?
   destination    String?
   program        String?
   counsellorName String?   @map("counsellor_name")
   counsellorId   String?   @map("counsellor_id") @db.Uuid
-  status         String
+  status         String    @default("Active")
   enrolledAt     DateTime? @map("enrolled_at")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at")
+  lead           Lead?     @relation(fields: [leadId], references: [id], onDelete: SetNull)
   counsellor     User?     @relation("StudentCounsellor", fields: [counsellorId], references: [id], onDelete: SetNull)
+  applications   Application[]
 
   @@index([status])
   @@index([counsellorId])

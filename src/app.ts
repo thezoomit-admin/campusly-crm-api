@@ -4,6 +4,10 @@ import express from "express";
 import { config } from "./config";
 import { HttpError } from "./lib/http-error";
 import { activitiesRouter } from "./modules/activities/activities.routes";
+import {
+  applicationsRouter,
+  leadApplicationsRouter,
+} from "./modules/applications/applications.routes";
 import { auditRouter } from "./modules/audit/audit.routes";
 import { attachSession } from "./modules/auth/attach-session.middleware";
 import { authRouter } from "./modules/auth/auth.routes";
@@ -111,6 +115,8 @@ export function createApp() {
   app.use("/api/packages", packagesRouter);
   app.use("/api/leads/:leadId/service-offers", serviceOffersRouter);
   app.use("/api/leads/:leadId/payments", leadPaymentsRouter);
+  app.use("/api/leads/:leadId/applications", leadApplicationsRouter);
+  app.use("/api/applications", applicationsRouter);
   app.use("/api/payments", paymentsRouter);
   app.use("/api/receipts", receiptsRouter);
   app.use("/api/audit-logs", auditRouter);

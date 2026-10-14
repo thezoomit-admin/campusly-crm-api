@@ -1158,20 +1158,51 @@ export async function getLead(auth: AuthContext, id: string) {
     },
     data: { status: "Overdue" },
   });
-  const [lead, nextFollowUp, statusItems] = await Promise.all([
-    prisma.lead.findUniqueOrThrow({ where: { id }, include: leadInclude }),
-    prisma.followUp.findFirst({
-      where: {
-        leadId: id,
-        status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
-      },
-      orderBy: [
-        { dueAt: { sort: "asc", nulls: "last" } },
-        { createdAt: "desc" },
-      ],
-    }),
-    loadLeadStatusItems(),
-  ]);
+  const [lead, nextFollowUp, statusItems, applications, student, crmFile] =
+    await Promise.all([
+      prisma.lead.findUniqueOrThrow({ where: { id }, include: leadInclude }),
+      prisma.followUp.findFirst({
+        where: {
+          leadId: id,
+          status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
+        },
+        orderBy: [
+          { dueAt: { sort: "asc", nulls: "last" } },
+          { createdAt: "desc" },
+        ],
+      }),
+      loadLeadStatusItems(),
+      prisma.application.findMany({
+        where: { leadId: id },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          code: true,
+          university: true,
+          program: true,
+          intake: true,
+          status: true,
+          countryName: true,
+          submittedAt: true,
+          createdAt: true,
+        },
+      }),
+      prisma.student.findUnique({
+        where: { leadId: id },
+        select: {
+          id: true,
+          studentCode: true,
+          name: true,
+          status: true,
+          destination: true,
+          program: true,
+        },
+      }),
+      prisma.crmFile.findUnique({
+        where: { leadId: id },
+        select: { id: true, code: true, status: true },
+      }),
+    ]);
   const hasPhoneDuplicate = lead.phoneNormalized
     ? Boolean(await findDuplicate(lead.phoneNormalized, lead.id))
     : false;
@@ -1186,6 +1217,33 @@ export async function getLead(auth: AuthContext, id: string) {
         canClose: hasPermission(auth.permissions, "lead:close"),
         canReopen: hasPermission(auth.permissions, "lead:reopen"),
       }),
+      applications: applications.map((item) => ({
+        id: item.id,
+        code: item.code,
+        university: item.university,
+        program: item.program,
+        intake: item.intake,
+        status: item.status,
+        countryName: item.countryName,
+        submittedAt: item.submittedAt
+          ? item.submittedAt.toISOString().slice(0, 10)
+          : null,
+        createdAt: item.createdAt.toISOString(),
+      })),
+      student: student
+        ? {
+            id: student.id,
+            studentCode: student.studentCode,
+            name: student.name,
+            status: student.status,
+            destination: student.destination,
+            program: student.program,
+          }
+        : null,
+      hasCrmFile: Boolean(crmFile),
+      crmFile: crmFile
+        ? { id: crmFile.id, code: crmFile.code, status: crmFile.status }
+        : null,
       nextFollowUp: nextFollowUp
         ? {
             id: nextFollowUp.id,
