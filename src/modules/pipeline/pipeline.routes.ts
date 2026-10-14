@@ -96,28 +96,14 @@ pipelineRouter.get('/leads', requirePermission('lead:view'), async (req, res, ne
 
 pipelineRouter.get('/applications', requirePermission('lead:convert'), async (req, res, next) => {
   try {
-    const search = queryString(req.query.search)?.toLowerCase()
-    const rows = await prisma.application.findMany({ orderBy: { updatedAt: 'desc' } })
-    const items = rows
-      .map((row) => ({
-        id: row.id,
-        code: row.code,
-        applicant: row.applicantName,
-        university: row.university || '—',
-        program: row.program || '—',
-        intake: row.intake || '—',
-        counsellor: row.counsellorName || '—',
-        status: row.status,
-        submitted: row.submittedAt ? formatDate(row.submittedAt) : '—',
-      }))
-      .filter((row) => {
-        if (!search) return true
-        return [row.applicant, row.university, row.program, row.counsellor, row.status]
-          .join(' ')
-          .toLowerCase()
-          .includes(search)
-      })
-    res.json({ items, total: items.length })
+    const { listApplications } = await import('../applications/applications.service')
+    res.json(
+      await listApplications(req.auth!, {
+        search: queryString(req.query.search),
+        page: Number(req.query.page) || 1,
+        limit: Number(req.query.limit) || 100,
+      }),
+    )
   } catch (error) {
     next(error)
   }
@@ -125,29 +111,14 @@ pipelineRouter.get('/applications', requirePermission('lead:convert'), async (re
 
 pipelineRouter.get('/students', requirePermission('lead:convert'), async (req, res, next) => {
   try {
-    const search = queryString(req.query.search)?.toLowerCase()
-    const rows = await prisma.student.findMany({ orderBy: { updatedAt: 'desc' } })
-    const items = rows
-      .map((row) => ({
-        id: row.id,
-        studentId: row.studentCode,
-        name: row.name,
-        destination: row.destination || '—',
-        program: row.program || '—',
-        counsellor: row.counsellorName || '—',
-        status: row.status,
-        enrolled: row.enrolledAt
-          ? row.enrolledAt.toLocaleString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' })
-          : '—',
-      }))
-      .filter((row) => {
-        if (!search) return true
-        return [row.studentId, row.name, row.destination, row.program, row.counsellor]
-          .join(' ')
-          .toLowerCase()
-          .includes(search)
-      })
-    res.json({ items, total: items.length })
+    const { listStudents } = await import('../applications/applications.service')
+    res.json(
+      await listStudents(req.auth!, {
+        search: queryString(req.query.search),
+        page: Number(req.query.page) || 1,
+        limit: Number(req.query.limit) || 100,
+      }),
+    )
   } catch (error) {
     next(error)
   }

@@ -167,15 +167,30 @@ async function nextCode(tx: Prisma.TransactionClient, key: string, prefix: strin
   return `${prefix}-${String(row.nextValue - 1).padStart(6, '0')}`
 }
 
-async function isFileOpenedLead(lead: { statusCode: string | null; status: string }) {
+async function isFileOpenedLead(lead: { id?: string; statusCode: string | null; status: string }) {
   if ((lead.statusCode || '').toUpperCase() === 'FILE_OPENED') return true
   if (!lead.statusCode && lead.status.trim().toLowerCase() === 'file opened') return true
+  const code = (lead.statusCode || '').toUpperCase()
+  if (code === 'CONVERTED' || code === 'FILE_OPENING_PENDING') return true
+  const name = lead.status.trim().toLowerCase()
+  if (name === 'converted' || name === 'file opening pending') return true
+  if (lead.id) {
+    const [hasFile, hasApplication] = await Promise.all([
+      prisma.crmFile.findUnique({ where: { leadId: lead.id }, select: { id: true } }),
+      prisma.application.findFirst({ where: { leadId: lead.id }, select: { id: true } }),
+    ])
+    if (hasFile || hasApplication) return true
+  }
   if (!lead.statusCode) return false
   const item = await prisma.masterDataItem.findFirst({
     where: { categoryKey: 'LEAD_STATUS', code: lead.statusCode },
     select: { behaviorKey: true },
   })
-  return item?.behaviorKey === 'file_opened'
+  return (
+    item?.behaviorKey === 'file_opened' ||
+    item?.behaviorKey === 'converted' ||
+    item?.behaviorKey === 'file_opening_pending'
+  )
 }
 
 export async function ensureFileDocumentSetup() {
