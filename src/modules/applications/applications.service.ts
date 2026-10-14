@@ -182,7 +182,15 @@ async function ensureStudentForLead(
 
 export async function listApplications(
   auth: AuthContext,
-  query: { search?: string; leadId?: string; status?: string; page?: number; limit?: number },
+  query: {
+    search?: string
+    leadId?: string
+    studentId?: string
+    counsellorId?: string
+    status?: string
+    page?: number
+    limit?: number
+  },
 ) {
   if (!hasPermission(auth.permissions, 'lead:convert') && !hasPermission(auth.permissions, 'lead:view')) {
     throw httpError.accessDenied('You do not have permission to view applications.')
@@ -191,9 +199,12 @@ export async function listApplications(
   const page = Math.max(1, query.page || 1)
   const limit = Math.min(100, Math.max(1, query.limit || 20))
   const search = query.search?.trim()
+  const counsellorId = query.counsellorId?.trim()
 
   const where: Prisma.ApplicationWhereInput = {
     ...(query.leadId ? { leadId: query.leadId } : {}),
+    ...(query.studentId ? { studentId: query.studentId } : {}),
+    ...(counsellorId ? { counsellorId } : {}),
     ...(query.status ? { status: query.status } : {}),
     ...(search
       ? {
@@ -505,6 +516,107 @@ export async function updateApplicationStatus(
     include: APP_INCLUDE,
   })
   return { application: serializeApplication(full) }
+}
+
+export async function getStudent(auth: AuthContext, id: string) {
+  if (!hasPermission(auth.permissions, 'lead:convert') && !hasPermission(auth.permissions, 'lead:view')) {
+    throw httpError.accessDenied('You do not have permission to view students.')
+  }
+
+  const row = await prisma.student.findUnique({
+    where: { id },
+    include: {
+      lead: {
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          status: true,
+          phone: true,
+          email: true,
+          preferredCourse: true,
+          preferredCountryCode: true,
+          country: true,
+        },
+      },
+      counsellor: { select: { id: true, fullName: true } },
+      applications: {
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          lead: { select: { id: true, code: true, name: true } },
+          student: { select: { id: true, studentCode: true } },
+        },
+      },
+    },
+  })
+  if (!row) throw httpError.notFound('Student not found.')
+  if (row.leadId) await assertCanViewLead(auth, row.leadId)
+
+  const sharedDocuments = row.leadId
+    ? await prisma.leadDocument.findMany({
+        where: { leadId: row.leadId, archivedAt: null, isLatest: true },
+        orderBy: { updatedAt: 'desc' },
+        take: 100,
+        select: {
+          id: true,
+          name: true,
+          categoryCode: true,
+          typeCode: true,
+          status: true,
+          fileName: true,
+          mimeType: true,
+          fileSize: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      })
+    : []
+
+  return {
+    student: {
+      id: row.id,
+      studentCode: row.studentCode,
+      name: row.name,
+      phone: row.phone,
+      email: row.email,
+      destination: row.destination,
+      program: row.program,
+      counsellorId: row.counsellorId,
+      counsellorName: row.counsellorName || row.counsellor?.fullName || null,
+      status: row.status,
+      enrolledAt: row.enrolledAt ? row.enrolledAt.toISOString().slice(0, 10) : null,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+      lead: row.lead
+        ? {
+            id: row.lead.id,
+            code: row.lead.code,
+            name: row.lead.name,
+            status: row.lead.status,
+            phone: row.lead.phone,
+            email: row.lead.email,
+            preferredCourse: row.lead.preferredCourse,
+            preferredCountryCode: row.lead.preferredCountryCode,
+            country: row.lead.country,
+          }
+        : null,
+      applications: row.applications.map(listItem),
+      sharedDocuments: sharedDocuments.map((doc) => ({
+        id: doc.id,
+        name: doc.name || doc.fileName,
+        categoryCode: doc.categoryCode,
+        typeCode: doc.typeCode,
+        status: doc.status,
+        fileName: doc.fileName,
+        mimeType: doc.mimeType,
+        fileSize: doc.fileSize,
+        createdAt: doc.createdAt.toISOString(),
+        updatedAt: doc.updatedAt.toISOString(),
+        scope: 'student_shared' as const,
+      })),
+      applicationsCount: row.applications.length,
+    },
+  }
 }
 
 export async function listStudents(

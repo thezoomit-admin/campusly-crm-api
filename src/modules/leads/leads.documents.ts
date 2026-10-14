@@ -872,6 +872,7 @@ export async function listGlobalLeadDocuments(
     categoryCode?: string
     status?: string
     uploadedById?: string
+    ownerId?: string
     dateFrom?: string
     dateTo?: string
     verified?: string
@@ -887,6 +888,7 @@ export async function listGlobalLeadDocuments(
   const page = Math.max(1, query.page || 1)
   const limit = Math.min(100, Math.max(5, query.limit || 20))
   const search = query.search?.trim().toLowerCase()
+  const ownerId = query.ownerId?.trim()
 
   const where: Prisma.LeadDocumentWhereInput = {
     isLatest: true,
@@ -905,7 +907,9 @@ export async function listGlobalLeadDocuments(
           },
         }
       : {}),
-    lead: {},
+    lead: {
+      ...(ownerId ? { ownerId } : {}),
+    },
   }
 
   const rows = await prisma.leadDocument.findMany({
