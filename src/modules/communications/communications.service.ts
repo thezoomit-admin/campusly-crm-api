@@ -1039,9 +1039,10 @@ export async function listCommunications(
             ],
           }
         : {},
-      {
-        OR: [{ leadId: null }, { lead: leadScope }],
-      },
+      // Prisma `{ lead: {} }` matches no related rows — ALL-scope must skip this filter.
+      Object.keys(leadScope).length === 0
+        ? {}
+        : { OR: [{ leadId: null }, { lead: leadScope }] },
     ],
   }
 
