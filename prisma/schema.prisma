@@ -166,6 +166,9 @@ model User {
   applicationsCreated           Application[]               @relation("ApplicationCreatedBy")
   applicationsUpdated           Application[]               @relation("ApplicationUpdatedBy")
   applicationStatusChanges      ApplicationStatusHistory[]  @relation("ApplicationStatusHistoryActor")
+  authoredApplicationNotes      ApplicationNote[]           @relation("ApplicationNoteAuthor")
+  applicationDocumentsCreated   ApplicationDocument[]       @relation("ApplicationDocumentCreatedBy")
+  applicationDocumentsUpdated   ApplicationDocument[]       @relation("ApplicationDocumentUpdatedBy")
   counselledStudents            Student[]                   @relation("StudentCounsellor")
   uploadedDocuments             CrmDocument[]               @relation("DocumentUploader")
   uploadedLeadDocuments         LeadDocument[]              @relation("LeadDocumentUploader")
@@ -1242,6 +1245,8 @@ model Application {
   createdBy      User?     @relation("ApplicationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy      User?     @relation("ApplicationUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
   statusHistory  ApplicationStatusHistory[]
+  notes          ApplicationNote[]
+  documents      ApplicationDocument[]
 
   @@index([leadId])
   @@index([studentId])
@@ -1263,6 +1268,68 @@ model ApplicationStatusHistory {
 
   @@index([applicationId, createdAt])
   @@map("application_status_history")
+}
+
+/// University / application-specific internal notes (separate from lead CRM notes).
+model ApplicationNote {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId String      @map("application_id") @db.Uuid
+  body          String      @db.Text
+  createdById   String?     @map("created_by_id") @db.Uuid
+  createdAt     DateTime    @default(now()) @map("created_at")
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdBy     User?       @relation("ApplicationNoteAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+  @@index([createdById])
+  @@map("application_notes")
+}
+
+enum ApplicationDocumentStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  ARCHIVED
+
+  @@map("application_document_status")
+}
+
+enum ApplicationDocumentSource {
+  UPLOAD
+  SHARED_LEAD_DOCUMENT
+  SHARED_FILE_DOCUMENT
+
+  @@map("application_document_source")
+}
+
+/// Per-application documents & checklist items. Approval is never shared across applications.
+model ApplicationDocument {
+  id               String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId    String                     @map("application_id") @db.Uuid
+  code             String                     @unique
+  title            String
+  categoryCode     String                     @default("APPLICATION") @map("category_code")
+  typeCode         String                     @default("OTHER") @map("type_code")
+  status           ApplicationDocumentStatus  @default(PENDING)
+  source           ApplicationDocumentSource  @default(UPLOAD)
+  sourceDocumentId String?                    @map("source_document_id") @db.Uuid
+  fileName         String?                    @map("file_name")
+  mimeType         String?                    @map("mime_type")
+  storageKey       String?                    @map("storage_key")
+  fileSize         Int?                       @map("file_size")
+  remarks          String?                    @db.Text
+  createdById      String?                    @map("created_by_id") @db.Uuid
+  updatedById      String?                    @map("updated_by_id") @db.Uuid
+  createdAt        DateTime                   @default(now()) @map("created_at")
+  updatedAt        DateTime                   @default(now()) @updatedAt @map("updated_at")
+  application      Application                @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdBy        User?                      @relation("ApplicationDocumentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy        User?                      @relation("ApplicationDocumentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+  @@index([applicationId, status])
+  @@index([sourceDocumentId])
+  @@map("application_documents")
 }
 
 model Student {

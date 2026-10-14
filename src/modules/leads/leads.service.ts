@@ -927,6 +927,7 @@ type LeadListFilters = {
   source?: string;
   priority?: string;
   country?: string;
+  ownerId?: string;
   duplicatesOnly?: boolean;
 };
 
@@ -936,6 +937,7 @@ async function leadListFilter(auth: AuthContext, query: LeadListFilters) {
   const source = query.source?.trim();
   const priority = query.priority?.trim();
   const country = query.country?.trim();
+  const ownerId = query.ownerId?.trim();
   const duplicatesOnly = query.duplicatesOnly === true;
   const scope = leadScopeWhere(auth);
   const duplicatePhones = duplicatesOnly
@@ -944,10 +946,14 @@ async function leadListFilter(auth: AuthContext, query: LeadListFilters) {
   const statusKey = status?.toLowerCase() || "all";
   const isClosedTab = statusKey === "closed";
   const isAllTab = !status || statusKey === "all";
+  // Owner-scoped user-profile lists should include closed leads; the main
+  // pipeline "All" tab stays limited to active/open statuses.
   const statusFilter: Prisma.LeadWhereInput = isClosedTab
     ? closedLeadsWhere()
     : isAllTab
-      ? activePipelineLeadsWhere()
+      ? ownerId
+        ? {}
+        : activePipelineLeadsWhere()
       : { status: { equals: status, mode: "insensitive" } };
 
   const listWhere: Prisma.LeadWhereInput = {
@@ -955,6 +961,7 @@ async function leadListFilter(auth: AuthContext, query: LeadListFilters) {
       scope,
       { archivedAt: null },
       statusFilter,
+      ownerId ? { ownerId } : {},
       source ? { source: { contains: source, mode: "insensitive" } } : {},
       priority ? { priority: { equals: priority, mode: "insensitive" } } : {},
       country ? { country: { contains: country, mode: "insensitive" } } : {},

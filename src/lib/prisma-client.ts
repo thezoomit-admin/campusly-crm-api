@@ -27,4 +27,6 @@ export type {
   FileDocumentStatus,
   PaymentTxnStatus,
   ActivityType,
+  ApplicationDocumentSource,
+  ApplicationDocumentStatus,
 } from '../../generated/prisma/index'

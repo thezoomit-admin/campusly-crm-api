@@ -124,6 +124,16 @@ pipelineRouter.get('/students', requirePermission('lead:convert'), async (req, r
   }
 })
 
+pipelineRouter.get('/students/:id', requirePermission('lead:convert'), async (req, res, next) => {
+  try {
+    const { getStudent } = await import('../applications/applications.service')
+    const { routeParam } = await import('../../lib/request')
+    res.json(await getStudent(req.auth!, routeParam(req.params.id)))
+  } catch (error) {
+    next(error)
+  }
+})
+
 pipelineRouter.get('/documents', requirePermission('document:view'), async (req, res, next) => {
   try {
     const { listGlobalLeadDocuments } = await import('../leads/leads.documents')
@@ -132,6 +142,7 @@ pipelineRouter.get('/documents', requirePermission('document:view'), async (req,
       categoryCode: queryString(req.query.categoryCode) || queryString(req.query.category),
       status: queryString(req.query.status),
       uploadedById: queryString(req.query.uploadedById),
+      ownerId: queryString(req.query.ownerId),
       dateFrom: queryString(req.query.dateFrom),
       dateTo: queryString(req.query.dateTo),
       verified: queryString(req.query.verified),

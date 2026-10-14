@@ -103,6 +103,7 @@ leadsRouter.get("/", requirePermission("lead:view"), async (req, res, next) => {
         source: queryString(req.query.source),
         priority: queryString(req.query.priority),
         country: queryString(req.query.country),
+        ownerId: queryString(req.query.ownerId),
         duplicatesOnly:
           req.query.duplicatesOnly === "1" ||
           req.query.duplicatesOnly === "true" ||

@@ -231,6 +231,9 @@ function serializeUser(
     updatedAt: user.updatedAt,
     acceptsLeadAssignment: user.status === "ACTIVE",
     inactiveOwnerLeadCount: 0,
+    assignedLeadCount: 0,
+    activeApplicationCount: 0,
+    pendingDocumentCount: 0,
     dataScopes: detail
       ? Object.fromEntries(
           detail.dataScopes.map((row) => [row.resource, row.scope]),
@@ -343,6 +346,8 @@ export async function exportUsersTable(
   };
 }
 
+const TERMINAL_APPLICATION_STATUSES = ["Enrolled", "Rejected", "Withdrawn"] as const;
+
 export async function getUser(auth: AuthContext, id: string) {
   await assertCanViewUser(auth, id);
   const user = await prisma.user.findUnique({
@@ -352,7 +357,40 @@ export async function getUser(auth: AuthContext, id: string) {
   if (!user) {
     throw httpError.notFound("User not found.");
   }
-  return serializeUser(user);
+
+  const ownedLeadsWhere = { ownerId: id, archivedAt: null } as const;
+  const [
+    assignedLeadCount,
+    activeApplicationCount,
+    pendingDocumentCount,
+    inactiveOwnerLeadCount,
+  ] = await Promise.all([
+    prisma.lead.count({ where: ownedLeadsWhere }),
+    prisma.application.count({
+      where: {
+        counsellorId: id,
+        status: { notIn: [...TERMINAL_APPLICATION_STATUSES] },
+      },
+    }),
+    prisma.leadDocument.count({
+      where: {
+        isLatest: true,
+        archivedAt: null,
+        status: "PENDING",
+        lead: ownedLeadsWhere,
+      },
+    }),
+    user.status === "ACTIVE"
+      ? Promise.resolve(0)
+      : prisma.lead.count({ where: ownedLeadsWhere }),
+  ]);
+
+  return serializeUser(user, {
+    assignedLeadCount,
+    activeApplicationCount,
+    pendingDocumentCount,
+    inactiveOwnerLeadCount,
+  });
 }
 
 async function applyUserPhoto(userId: string, photo?: Express.Multer.File) {

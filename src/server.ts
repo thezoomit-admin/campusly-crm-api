@@ -6,7 +6,7 @@ import { startEmailInboundSyncJob } from "./jobs/email-inbound-sync";
 import { startEmailWaitingReplyJob } from "./jobs/email-waiting-reply";
 import { startFollowUpJobs } from "./jobs/follow-up-jobs";
 import { startOfferExpiryJob } from "./jobs/offer-expiry";
-import { prisma } from "./lib/prisma";
+import { ensureDbConnected, prisma } from "./lib/prisma";
 import { ensureLeadAttribution } from "./modules/leads/lead-attribution";
 import { ensurePerformanceSetup } from "./modules/performance/performance.service";
 import { syncStoredLeadScores } from "./modules/leads/leads.helpers";
@@ -90,7 +90,7 @@ process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 async function bootstrap() {
   try {
-    await prisma.$connect();
+    await ensureDbConnected();
     console.log("✅ Database connected successfully");
     await ensureLeadAttribution().catch((error) => {
       console.error("Lead attribution setup skipped:", error);
