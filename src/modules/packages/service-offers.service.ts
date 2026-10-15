@@ -334,12 +334,23 @@ export async function serviceOfferContext(auth: AuthContext, leadId: string) {
   const fileOpening = await countryFileOpeningDefault(
     lead.preferredCountryCode,
   );
+  const owner = lead.ownerId
+    ? await prisma.user.findUnique({
+        where: { id: lead.ownerId },
+        select: { id: true, fullName: true },
+      })
+    : null;
   return {
     lead: {
       id: lead.id,
+      code: lead.code,
       name: lead.name,
+      createdAt: lead.createdAt.toISOString(),
       preferredCountryCode: lead.preferredCountryCode,
       preferredCountryName: fileOpening?.countryName ?? null,
+      assignedTo: owner
+        ? { id: owner.id, fullName: owner.fullName }
+        : null,
     },
     fileOpeningChargeDefault:
       fileOpening?.amount == null ? "0.00" : money(fileOpening.amount),
