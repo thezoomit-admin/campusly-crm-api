@@ -122,6 +122,58 @@ function typeToCategory(type: ActivityTypeValue): FeedCategory {
   return "system";
 }
 
+/** Status transitions are stored as NOTE activities with status metadata. */
+function statusChangeActionKey(
+  metadata: Record<string, unknown> | null,
+  notes: string | null,
+): string | null {
+  if (!metadata && !notes) return null;
+  const event = stringify(metadata?.event).toUpperCase();
+  if (
+    event === "LEAD_STATUS_CHANGED" ||
+    event === "LEAD_CLOSED" ||
+    event === "LEAD_REOPENED"
+  ) {
+    return event;
+  }
+  const action = stringify(metadata?.action).toLowerCase();
+  if (action === "close") return "LEAD_CLOSED";
+  if (action === "reopen") return "LEAD_REOPENED";
+  if (
+    metadata?.previousStatus != null &&
+    metadata?.newStatus != null &&
+    String(metadata.previousStatus) !== "" &&
+    String(metadata.newStatus) !== ""
+  ) {
+    return "LEAD_STATUS_CHANGED";
+  }
+  const note = (notes || "").toLowerCase();
+  if (note.startsWith("status changed")) return "LEAD_STATUS_CHANGED";
+  if (note.startsWith("lead closed")) return "LEAD_CLOSED";
+  if (note.startsWith("lead reopened")) return "LEAD_REOPENED";
+  return null;
+}
+
+function statusChangeDetails(
+  metadata: Record<string, unknown> | null,
+  notes: string | null,
+  actionKey: string,
+) {
+  const from = stringify(metadata?.previousStatus);
+  const to = stringify(metadata?.newStatus);
+  const remarks = stringify(metadata?.remarks || metadata?.reopenReason);
+  if (actionKey === "LEAD_CLOSED" && to) {
+    return `Lead closed as ${to}${remarks ? `. ${remarks}` : ""}`;
+  }
+  if (actionKey === "LEAD_REOPENED" && from && to) {
+    return `Lead reopened from ${from} to ${to}${remarks ? `. ${remarks}` : ""}`;
+  }
+  if (from && to) {
+    return `Status changed from ${from} to ${to}${remarks ? `. ${remarks}` : ""}`;
+  }
+  return notes || "Status updated";
+}
+
 function actionLabel(type: ActivityTypeValue) {
   return ACTIVITY_TYPE_LABELS[type] || humanize(type);
 }
@@ -490,7 +542,12 @@ export async function listActivityFeed(
   const prevTo = new Date(from.getTime() - 1);
   const prevFrom = new Date(prevTo.getTime() - duration);
   const scope = scopeWhere(auth);
-  const userFilter = query.userId ? { userId: query.userId } : scope;
+  // Lead-scoped feeds show every actor on that lead so status changes include who changed them.
+  const userFilter = query.userId
+    ? { userId: query.userId }
+    : query.relatedId
+      ? {}
+      : scope;
 
   const relatedFilter = query.relatedId ? { relatedId: query.relatedId } : {};
   const auditRelatedFilter = query.relatedId
@@ -524,27 +581,54 @@ export async function listActivityFeed(
     }),
   ]);
 
-  const mappedActivities: ActivityFeedItem[] = activities.map((row) => ({
-    id: `activity:${row.id}`,
-    source: "activity" as const,
-    category: typeToCategory(row.type),
-    action: actionLabel(row.type),
-    actionKey: row.type,
-    module: "Communication",
-    details: activityDetails(row),
-    relatedName: row.relatedName,
-    relatedType: row.relatedType,
-    relatedId: row.relatedId,
-    outcome: row.outcome,
-    durationMin: row.durationMin,
-    nextAction: row.nextAction,
-    status: "Completed",
-    ipAddress: row.ipAddress,
-    userAgent: row.userAgent,
-    occurredAt: row.occurredAt,
-    user: toUserDto(row.user),
-    metadata: asRecord(row.metadata),
-  }));
+  const mappedActivities: ActivityFeedItem[] = activities.map((row) => {
+    const metadata = asRecord(row.metadata);
+    const statusKey = statusChangeActionKey(metadata, row.notes);
+    if (statusKey) {
+      return {
+        id: `activity:${row.id}`,
+        source: "activity" as const,
+        category: "status" as const,
+        action: "Status",
+        actionKey: statusKey,
+        module: "Leads",
+        details: statusChangeDetails(metadata, row.notes, statusKey),
+        relatedName: row.relatedName,
+        relatedType: row.relatedType,
+        relatedId: row.relatedId,
+        outcome: row.outcome,
+        durationMin: row.durationMin,
+        nextAction: row.nextAction,
+        status: "Completed",
+        ipAddress: row.ipAddress,
+        userAgent: row.userAgent,
+        occurredAt: row.occurredAt,
+        user: toUserDto(row.user),
+        metadata,
+      };
+    }
+    return {
+      id: `activity:${row.id}`,
+      source: "activity" as const,
+      category: typeToCategory(row.type),
+      action: actionLabel(row.type),
+      actionKey: row.type,
+      module: "Communication",
+      details: activityDetails(row),
+      relatedName: row.relatedName,
+      relatedType: row.relatedType,
+      relatedId: row.relatedId,
+      outcome: row.outcome,
+      durationMin: row.durationMin,
+      nextAction: row.nextAction,
+      status: "Completed",
+      ipAddress: row.ipAddress,
+      userAgent: row.userAgent,
+      occurredAt: row.occurredAt,
+      user: toUserDto(row.user),
+      metadata,
+    };
+  });
 
   const mappedAudits: ActivityFeedItem[] = audits
     .filter((row) => !skipAuditAction(row.action))

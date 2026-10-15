@@ -55,7 +55,8 @@ export const MESSAGES = {
   discountExceedsLine: "Discount value cannot exceed the line total.",
   discountReason: "Please provide a reason for the applied discount.",
   priceOverride: "You are not authorized to change the service price.",
-  inactive: "This service or package is currently inactive.",
+  inactivePackage: "This package is currently inactive.",
+  inactiveService: "This service or package is currently inactive.",
   permissionDenied:
     "You do not have permission to create or modify this offer.",
   saveFailed: "Unable to save the service offer. Please try again.",
@@ -428,8 +429,8 @@ async function resolvePackage(
     return null;
   }
   if (source.status !== "ACTIVE") {
-    throw new HttpError(400, MESSAGES.inactive, "INACTIVE_PACKAGE", {
-      packageId: MESSAGES.inactive,
+    throw new HttpError(400, MESSAGES.inactivePackage, "INACTIVE_PACKAGE", {
+      packageId: MESSAGES.inactivePackage,
     });
   }
   if (
@@ -604,8 +605,8 @@ async function prepareOffer(
           return;
         }
         if (row.status !== "ACTIVE") {
-          throw new HttpError(400, MESSAGES.inactive, "INACTIVE_SERVICE", {
-            [key]: MESSAGES.inactive,
+          throw new HttpError(400, MESSAGES.inactiveService, "INACTIVE_SERVICE", {
+            [key]: MESSAGES.inactiveService,
           });
         }
         serviceName = row.name;

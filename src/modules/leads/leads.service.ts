@@ -331,6 +331,7 @@ function listItem(
   lead: LeadRecord,
   nextFollowUpAt: string | null = null,
   hasPhoneDuplicate = false,
+  closeMeta?: { closedBy?: string | null; closeReason?: string | null },
 ) {
   const scored = displayedLeadScore(lead);
   return {
@@ -359,6 +360,8 @@ function listItem(
           name: lead.duplicateOf.name,
         }
       : null,
+    closedBy: closeMeta?.closedBy ?? null,
+    closeReason: closeMeta?.closeReason ?? null,
   };
 }
 
@@ -882,13 +885,31 @@ async function metricsFor(data: ParsedLead, extra?: Partial<LeadRecord>) {
   };
 }
 
+function isClosedListLead(lead: LeadRecord) {
+  const code = (lead.statusCode || "").trim().toUpperCase();
+  if (
+    CLOSED_PIPELINE_STATUS_CODES.includes(
+      code as (typeof CLOSED_PIPELINE_STATUS_CODES)[number],
+    )
+  ) {
+    return true;
+  }
+  const name = lead.status.trim().toLowerCase();
+  return CLOSED_PIPELINE_STATUS_NAMES.some(
+    (item) => item.toLowerCase() === name,
+  );
+}
+
 async function hydrateLeadRows(
   rows: LeadRecord[],
   duplicatesOnly: boolean,
   duplicatePhones: string[] | null,
 ) {
   const leadIds = rows.map((lead) => lead.id);
-  const [nextFollowUps, sharedPhones] = await Promise.all([
+  const closedLeadIds = rows
+    .filter((lead) => isClosedListLead(lead))
+    .map((lead) => lead.id);
+  const [nextFollowUps, sharedPhones, closeHistories] = await Promise.all([
     leadIds.length
       ? prisma.followUp.findMany({
           where: { leadId: { in: leadIds }, AND: [openFollowUpWhere()] },
@@ -901,6 +922,19 @@ async function hydrateLeadRows(
     duplicatesOnly
       ? Promise.resolve(new Set(duplicatePhones || []))
       : sharedPhoneNormalizedSet(rows.map((lead) => lead.phoneNormalized)),
+    closedLeadIds.length
+      ? prisma.leadStatusHistory.findMany({
+          where: {
+            leadId: { in: closedLeadIds },
+            OR: [
+              { newStatusCode: { in: [...CLOSED_PIPELINE_STATUS_CODES] } },
+              { newStatus: { in: [...CLOSED_PIPELINE_STATUS_NAMES] } },
+            ],
+          },
+          include: { createdBy: { select: { id: true, fullName: true } } },
+          orderBy: { createdAt: "desc" },
+        })
+      : Promise.resolve([]),
   ]);
   const nextByLead = new Map<string, (typeof nextFollowUps)[number]>();
   for (const followUp of nextFollowUps) {
@@ -908,15 +942,88 @@ async function hydrateLeadRows(
       nextByLead.set(followUp.leadId, followUp);
   }
 
+  const closeHistoryByLead = new Map<
+    string,
+    (typeof closeHistories)[number]
+  >();
+  for (const history of closeHistories) {
+    if (!closeHistoryByLead.has(history.leadId)) {
+      closeHistoryByLead.set(history.leadId, history);
+    }
+  }
+
+  const lostCodes = [
+    ...new Set(
+      rows
+        .map(
+          (lead) =>
+            lead.lostReasonCode ||
+            closeHistoryByLead.get(lead.id)?.lostReasonCode ||
+            null,
+        )
+        .filter((code): code is string => Boolean(code)),
+    ),
+  ];
+  const closeCodes = [
+    ...new Set(
+      rows
+        .map(
+          (lead) =>
+            lead.closeReasonCode ||
+            closeHistoryByLead.get(lead.id)?.closeReasonCode ||
+            null,
+        )
+        .filter((code): code is string => Boolean(code)),
+    ),
+  ];
+  const [lostReasons, closeReasons] = await Promise.all([
+    lostCodes.length
+      ? prisma.masterDataItem.findMany({
+          where: { categoryKey: "LEAD_LOST_REASON", code: { in: lostCodes } },
+          select: { code: true, name: true },
+        })
+      : Promise.resolve([]),
+    closeCodes.length
+      ? prisma.masterDataItem.findMany({
+          where: { categoryKey: "LEAD_CLOSE_REASON", code: { in: closeCodes } },
+          select: { code: true, name: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const lostMap = new Map(lostReasons.map((item) => [item.code, item.name]));
+  const closeMap = new Map(closeReasons.map((item) => [item.code, item.name]));
+
   return rows.map((lead) => {
     const next = nextByLead.get(lead.id);
     const hasPhoneDuplicate = Boolean(
       lead.phoneNormalized && sharedPhones.has(lead.phoneNormalized),
     );
+    const history = closeHistoryByLead.get(lead.id);
+    const lostCode = lead.lostReasonCode || history?.lostReasonCode || null;
+    const closeCode = lead.closeReasonCode || history?.closeReasonCode || null;
+    const reasonLabel = lostCode
+      ? lostMap.get(lostCode) || lostCode
+      : closeCode
+        ? closeMap.get(closeCode) || closeCode
+        : null;
+    const remarks = history?.remarks?.trim() || "";
+    const closeReason = remarks
+      ? reasonLabel
+        ? `${reasonLabel} — ${remarks}`
+        : remarks
+      : reasonLabel;
+    const closedBy =
+      history?.createdBy?.fullName ||
+      lead.updatedBy?.fullName ||
+      null;
+
     return listItem(
       lead,
       next?.dueAt ? next.dueAt.toISOString() : null,
       hasPhoneDuplicate,
+      isClosedListLead(lead)
+        ? { closedBy, closeReason: closeReason || null }
+        : undefined,
     );
   });
 }
@@ -1137,6 +1244,8 @@ export async function exportLeadRows(
       { header: "Priority", key: "priority", width: 14 },
       { header: "Follow-up", key: "followUp", width: 22 },
       { header: "Assigned To", key: "owner", width: 22 },
+      { header: "Closed By", key: "closedBy", width: 22 },
+      { header: "Reason", key: "closeReason", width: 36 },
       { header: "Created On", key: "createdOn", width: 22 },
     ],
     rows: items.map((item) => ({
@@ -1150,6 +1259,8 @@ export async function exportLeadRows(
       priority: exportCell(item.priority),
       followUp: formatExportDateTime(item.nextFollowUpAt),
       owner: exportCell(item.owner),
+      closedBy: exportCell(item.closedBy),
+      closeReason: exportCell(item.closeReason),
       createdOn: formatExportDateTime(item.createdAt),
     })),
   };
@@ -1972,12 +2083,15 @@ export async function updateLeadStatus(
           relatedId: updated.id,
           outcome: next.name,
           metadata: {
+            event: "LEAD_STATUS_CHANGED",
             previousStatus: current!.name,
             previousStatusCode: current!.code,
             newStatus: next.name,
             newStatusCode: next.code,
             remarks: remarks || null,
             isOverride: option.requiresOverride,
+            changedById: auth.user.id,
+            changedByName: auth.user.fullName,
           },
           ipAddress: meta.ipAddress,
           userAgent: meta.userAgent,
@@ -2145,8 +2259,10 @@ export async function closeLead(
   throwIfInvalid(fields);
 
   const remarks = asString(body.remarks);
-  if (remarks.length > 1000) {
-    fields.remarks = "Remarks cannot exceed 1000 characters.";
+  if (!remarks) {
+    fields.remarks = CLOSE_MESSAGES.remarks;
+  } else if (remarks.length > 1000) {
+    fields.remarks = "Reason cannot exceed 1000 characters.";
   }
 
   let lostReasonCode: string | null = null;
@@ -2215,6 +2331,7 @@ export async function closeLead(
           relatedId: updated.id,
           outcome: next!.name,
           metadata: {
+            event: "LEAD_CLOSED",
             action: "close",
             previousStatus: current.name,
             previousStatusCode: current.code,
@@ -2223,6 +2340,8 @@ export async function closeLead(
             remarks: remarks || null,
             lostReasonCode,
             closeReasonCode,
+            changedById: auth.user.id,
+            changedByName: auth.user.fullName,
           },
           ipAddress: meta.ipAddress,
           userAgent: meta.userAgent,
@@ -2424,6 +2543,7 @@ export async function reopenLead(
           relatedId: updated.id,
           outcome: "Reopened",
           metadata: {
+            event: "LEAD_REOPENED",
             action: "reopen",
             previousStatus: current.name,
             previousStatusCode: current.code,
@@ -2433,6 +2553,8 @@ export async function reopenLead(
             followUpDate: followUpDate!.toISOString(),
             ownerId: assignee.id,
             ownerName: assignee.fullName,
+            changedById: auth.user.id,
+            changedByName: auth.user.fullName,
           },
           ipAddress: meta.ipAddress,
           userAgent: meta.userAgent,

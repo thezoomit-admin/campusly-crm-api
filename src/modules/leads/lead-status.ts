@@ -34,7 +34,8 @@ export const STATUS_MESSAGES = {
 export const CLOSE_MESSAGES = {
   permission: 'You do not have permission to close or reopen this lead.',
   reason: 'Please select a reason before closing this lead.',
-  remarksOther: 'Please provide remarks for the selected "Other" reason.',
+  remarks: 'Please provide a reason.',
+  remarksOther: 'Please provide a reason for the selected "Other" option.',
   status: 'Please select Lost, Closed, Duplicate, or Invalid.',
   notAllowed: 'This lead cannot be closed from its current status.',
   failed: 'Unable to complete this action. Please try again.',
