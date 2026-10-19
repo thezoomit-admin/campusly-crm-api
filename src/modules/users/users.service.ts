@@ -293,7 +293,7 @@ export async function listUsers(
   const users = await prisma.user.findMany({
     where,
     include: userListInclude,
-    orderBy: { fullName: "asc" },
+    orderBy: { createdAt: "desc" },
   });
 
   return users.map((user) => serializeUser(user));
@@ -400,6 +400,11 @@ async function applyUserPhoto(userId: string, photo?: Express.Multer.File) {
   const saved = await saveUserProfilePhoto(userId, photo);
   await prisma.user.update({
     where: { id: userId },
+    data: { photoUrl: saved.url },
+  });
+  // Keep linked employee avatar in sync for HR/profile views.
+  await prisma.employee.updateMany({
+    where: { userId },
     data: { photoUrl: saved.url },
   });
   return saved.url;

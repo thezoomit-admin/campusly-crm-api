@@ -91,6 +91,8 @@ const leadInclude = {
       teamId: true,
       photoUrl: true,
       updatedAt: true,
+      primaryRole: { select: { key: true, name: true } },
+      team: { select: { id: true, name: true } },
     },
   },
   assignedCountryTeam: { select: { id: true, name: true, key: true } },
@@ -240,9 +242,26 @@ function serializeLead(
             lead.owner.photoUrl,
             lead.owner.updatedAt,
           ),
+          role: lead.owner.primaryRole
+            ? {
+                key: lead.owner.primaryRole.key,
+                name: lead.owner.primaryRole.name,
+              }
+            : null,
+          teamId: lead.owner.teamId,
+          team: lead.owner.team
+            ? { id: lead.owner.team.id, name: lead.owner.team.name }
+            : null,
         }
       : lead.ownerName
-        ? { id: lead.ownerId, name: lead.ownerName, photoUrl: null }
+        ? {
+            id: lead.ownerId,
+            name: lead.ownerName,
+            photoUrl: null,
+            role: null,
+            teamId: null,
+            team: null,
+          }
         : null,
     assignedTeam: lead.assignedCountryTeam
       ? { id: lead.assignedCountryTeam.id, name: lead.assignedCountryTeam.name }
@@ -1456,19 +1475,7 @@ export async function createLead(
         createdById: auth.user.id,
       },
     });
-    await tx.activity.create({
-      data: {
-        type: "NOTE",
-        userId: auth.user.id,
-        notes: `Lead created (${created.code})`,
-        relatedName: created.name,
-        relatedType: "lead",
-        relatedId: created.id,
-        outcome: "Created",
-        ipAddress: meta.ipAddress,
-        userAgent: meta.userAgent,
-      },
-    });
+    // Lead creation is already recorded via LEAD_CREATED audit — skip NOTE activity.
     await tx.leadStatusHistory.create({
       data: {
         leadId: created.id,
@@ -3124,11 +3131,20 @@ export async function listLeadAssignees(
     query.role === "counsellor" || query.role === "call_executive"
       ? query.role
       : undefined;
+  // When a target team is provided (reassign/assign within the lead's team),
+  // list that team's eligible members — do not also AND visibility scope, or
+  // managers on another team see an empty list. Counsellor handover already
+  // skips visibility the same way.
+  const visibilityWhere =
+    role === "counsellor" || teamId
+      ? {}
+      : assigneeVisibilityWhere(auth);
+
   const users = await prisma.user.findMany({
     where: {
       AND: [
         leadEligibleAssigneeWhere(),
-        role === "counsellor" ? {} : assigneeVisibilityWhere(auth),
+        visibilityWhere,
         role
           ? { primaryRole: { key: role } }
           : { primaryRole: { key: { in: [...ASSIGNEE_ROLE_KEYS] } } },
@@ -3231,21 +3247,7 @@ export async function assignLead(
           createdById: auth.user.id,
         },
       });
-      await tx.activity.create({
-        data: {
-          type: "NOTE",
-          userId: auth.user.id,
-          notes: isUnassigned
-            ? `Lead assigned to ${assignee.fullName}`
-            : `Lead reassigned from ${fromOwnerName || "Unassigned"} to ${assignee.fullName}`,
-          relatedName: updated.name,
-          relatedType: "lead",
-          relatedId: updated.id,
-          outcome: "Assigned",
-          ipAddress: meta.ipAddress,
-          userAgent: meta.userAgent,
-        },
-      });
+      // Assignment is already recorded via LEAD_ASSIGNED audit — skip NOTE activity.
       return { lead: updated, assignmentId: assignment.id };
     });
     const lead = assigned.lead;
@@ -3261,34 +3263,40 @@ export async function assignLead(
       metadata: {
         code: lead.code,
         fromOwnerId,
+        fromOwnerName: fromOwnerName || null,
         toOwnerId: assignee.id,
         toOwnerName: assignee.fullName,
+        from: fromOwnerName || "Unassigned",
+        to: assignee.fullName,
         reason,
         relatedName: lead.name,
         name: lead.name,
       },
     });
 
-    // Auto first follow-up on assignment (CRM-005 Rule-18)
+    // Auto first follow-up only on first assign from pool (CRM-005 Rule-18).
+    // Reassignment must not spawn extra note/follow-up activity noise.
     try {
-      const { createSystemFollowUp, daysFromNow } =
-        await import("../follow-ups/system-follow-up");
-      await createSystemFollowUp({
-        leadId: lead.id,
-        contactName: lead.name,
-        type: "Call",
-        purpose: "Initial Contact",
-        nextAction: "Make first contact call",
-        dueAt: daysFromNow(1),
-        priority: lead.priority || "Medium",
-        ownerId: assignee.id,
-        ownerName: assignee.fullName,
-        reason: isUnassigned
-          ? "Lead Assigned — First Follow-up"
-          : "Lead Reassigned — First Follow-up",
-        actorUserId: auth.user.id,
-        meta,
-      });
+      if (isUnassigned) {
+        const { createSystemFollowUp, daysFromNow } =
+          await import("../follow-ups/system-follow-up");
+        await createSystemFollowUp({
+          leadId: lead.id,
+          contactName: lead.name,
+          type: "Call",
+          purpose: "Initial Contact",
+          nextAction: "Make first contact call",
+          dueAt: daysFromNow(1),
+          priority: lead.priority || "Medium",
+          ownerId: assignee.id,
+          ownerName: assignee.fullName,
+          reason: "Lead Assigned — First Follow-up",
+          actorUserId: auth.user.id,
+          meta,
+          // Follow-up remains on Follow-up History / queue; avoid Activities clutter.
+          logActivity: false,
+        });
+      }
       const { dispatchCrmEvent } = await import("../notifications/notifications.service");
       const when = new Date().toLocaleString("en-US", {
         timeZone: "Asia/Dhaka",

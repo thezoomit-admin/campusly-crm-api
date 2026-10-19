@@ -26,12 +26,11 @@ export const ATTRIBUTION_MESSAGES = {
 
 export const CONVERTED_STATUS_CODES = ['CONVERTED', 'FILE_OPENING_PENDING', 'FILE_OPENED'] as const
 
-/** Sources captured only by integrations. Hidden on the manual lead form. */
+/**
+ * System lead-ad sources — created only by Meta integrations.
+ * Hidden on the manual lead form; all other active LEAD_SOURCE master data is selectable.
+ */
 export const INTEGRATION_SOURCE_CODES = new Set([
-  'WEBSITE',
-  'META',
-  'WHATSAPP',
-  'EMAIL',
   'FACEBOOK_LEAD_ADS',
   'INSTAGRAM_LEAD_ADS',
 ])
@@ -510,8 +509,11 @@ export async function correctLeadSource(
   const reason = await requireReason(body, fields)
   const rawSource = asString(body.sourceCode).toUpperCase()
   if (!rawSource) fields.sourceCode = ATTRIBUTION_MESSAGES.sourceRequired
-  const source = rawSource ? await activeSource(rawSource) : null
-  if (rawSource && !source?.code) fields.sourceCode = ATTRIBUTION_MESSAGES.sourceInvalid
+  if (rawSource && INTEGRATION_SOURCE_CODES.has(rawSource)) {
+    fields.sourceCode = ATTRIBUTION_MESSAGES.sourceInvalid
+  }
+  const source = rawSource && !fields.sourceCode ? await activeSource(rawSource) : null
+  if (rawSource && !fields.sourceCode && !source?.code) fields.sourceCode = ATTRIBUTION_MESSAGES.sourceInvalid
 
   let channelCode = current.channelCode
   if (source && body.channelCode !== undefined) {

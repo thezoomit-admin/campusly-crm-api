@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { UploadApiErrorResponse, UploadApiResponse } from 'cloudinary'
 import cloudinary, { CLOUDINARY_FOLDER } from '../../config/cloudinary'
@@ -38,6 +38,14 @@ export type StoredUpload = {
   storageKey: string
   fileSize: number
   url: string
+}
+
+function cloudinaryConfigured() {
+  return Boolean(
+    process.env.CLOUDINARY_CLOUD_NAME?.trim() &&
+      process.env.CLOUDINARY_API_KEY?.trim() &&
+      process.env.CLOUDINARY_API_SECRET?.trim(),
+  )
 }
 
 function extensionFor(mimeType: string, originalName: string) {
@@ -88,10 +96,18 @@ function encodeStorageKey(resourceType: CloudinaryResourceType, deliveryType: Cl
   return `${resourceType}:${deliveryType}:${publicId}`
 }
 
+function encodeLocalStorageKey(employeeId: string, relativeName: string) {
+  return `local:${employeeId}/documents/${relativeName}`
+}
+
 function parseStorageKey(storageKey: string) {
+  if (storageKey.startsWith('local:')) {
+    return { kind: 'local' as const, relativePath: storageKey.slice('local:'.length) }
+  }
   const parts = storageKey.split(':')
   if (parts.length >= 3 && (parts[0] === 'image' || parts[0] === 'raw') && (parts[1] === 'upload' || parts[1] === 'private')) {
     return {
+      kind: 'cloudinary' as const,
       resourceType: parts[0] as CloudinaryResourceType,
       deliveryType: parts[1] as CloudinaryDeliveryType,
       publicId: parts.slice(2).join(':'),
@@ -141,8 +157,42 @@ export function employeeDir(employeeId: string) {
   return path.join(UPLOAD_ROOT, employeeId)
 }
 
-export async function saveProfilePhoto(employeeId: string, file: Express.Multer.File) {
-  assertAllowed(file, 'image', 'Profile photo')
+function documentsDir(employeeId: string) {
+  return path.join(employeeDir(employeeId), 'documents')
+}
+
+async function clearLocalProfileFiles(employeeId: string) {
+  const dir = employeeDir(employeeId)
+  let entries: string[] = []
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return
+  }
+  await Promise.all(
+    entries
+      .filter((name) => name.startsWith('profile.'))
+      .map((name) => unlink(path.join(dir, name)).catch(() => undefined)),
+  )
+}
+
+async function saveLocalProfilePhoto(employeeId: string, file: Express.Multer.File) {
+  const dir = employeeDir(employeeId)
+  await mkdir(dir, { recursive: true })
+  await clearLocalProfileFiles(employeeId)
+  const ext = extensionFor(file.mimetype, file.originalname) || '.jpg'
+  const fileName = `profile${ext}`
+  await writeFile(path.join(dir, fileName), file.buffer)
+  return {
+    storageKey: fileName,
+    url: `/api/employees/${employeeId}/photo`,
+    mimeType: file.mimetype,
+    fileName: file.originalname,
+    fileSize: file.size,
+  }
+}
+
+async function saveCloudinaryProfilePhoto(employeeId: string, file: Express.Multer.File) {
   const result = await uploadBuffer(file, {
     folder: employeePrefix(employeeId),
     public_id: 'profile',
@@ -160,6 +210,71 @@ export async function saveProfilePhoto(employeeId: string, file: Express.Multer.
   }
 }
 
+export async function saveProfilePhoto(employeeId: string, file: Express.Multer.File) {
+  assertAllowed(file, 'image', 'Profile photo')
+
+  if (cloudinaryConfigured()) {
+    try {
+      return await saveCloudinaryProfilePhoto(employeeId, file)
+    } catch (error) {
+      console.error('Employee photo Cloudinary upload failed, using local storage:', error)
+    }
+  }
+
+  try {
+    return await saveLocalProfilePhoto(employeeId, file)
+  } catch (error) {
+    console.error('Employee photo local upload failed:', error)
+    throw httpError.invalidUpload(
+      'Profile photo storage is unavailable. Please try again or contact an administrator.',
+    )
+  }
+}
+
+async function saveLocalDocument(
+  employeeId: string,
+  file: Express.Multer.File,
+  type: EmployeeDocumentType,
+): Promise<StoredUpload> {
+  const ext = extensionFor(file.mimetype, file.originalname)
+  const relativeName = `${type.toLowerCase()}-${randomUUID()}${ext}`
+  const directory = documentsDir(employeeId)
+  await mkdir(directory, { recursive: true })
+  await writeFile(path.join(directory, relativeName), file.buffer)
+
+  return {
+    type,
+    fileName: file.originalname || relativeName,
+    mimeType: file.mimetype,
+    storageKey: encodeLocalStorageKey(employeeId, relativeName),
+    fileSize: file.size,
+    url: `/api/employees/${employeeId}/documents`,
+  }
+}
+
+async function saveCloudinaryDocument(
+  employeeId: string,
+  file: Express.Multer.File,
+  type: EmployeeDocumentType,
+): Promise<StoredUpload> {
+  const resourceType = resourceTypeFor(file.mimetype)
+  const ext = extensionFor(file.mimetype, file.originalname)
+  const result = await uploadBuffer(file, {
+    folder: `${employeePrefix(employeeId)}/documents`,
+    public_id: `${type.toLowerCase()}-${randomUUID()}${resourceType === 'raw' ? ext : ''}`,
+    resource_type: resourceType,
+    type: 'private',
+  })
+  return {
+    type,
+    fileName: file.originalname || result.public_id,
+    mimeType: file.mimetype,
+    storageKey: encodeStorageKey(resourceType, 'private', result.public_id),
+    fileSize: file.size,
+    url: result.secure_url,
+  }
+}
+
 export async function saveDocuments(employeeId: string, files: Partial<Record<DocumentFieldName, Express.Multer.File[]>>) {
   const saved: StoredUpload[] = []
 
@@ -167,22 +282,24 @@ export async function saveDocuments(employeeId: string, files: Partial<Record<Do
     const uploads = files[field] || []
     for (const file of uploads) {
       assertAllowed(file, 'document', file.originalname || type)
-      const resourceType = resourceTypeFor(file.mimetype)
-      const ext = extensionFor(file.mimetype, file.originalname)
-      const result = await uploadBuffer(file, {
-        folder: `${employeePrefix(employeeId)}/documents`,
-        public_id: `${type.toLowerCase()}-${randomUUID()}${resourceType === 'raw' ? ext : ''}`,
-        resource_type: resourceType,
-        type: 'private',
-      })
-      saved.push({
-        type,
-        fileName: file.originalname || result.public_id,
-        mimeType: file.mimetype,
-        storageKey: encodeStorageKey(resourceType, 'private', result.public_id),
-        fileSize: file.size,
-        url: result.secure_url,
-      })
+
+      if (cloudinaryConfigured()) {
+        try {
+          saved.push(await saveCloudinaryDocument(employeeId, file, type))
+          continue
+        } catch (error) {
+          console.error('Employee document Cloudinary upload failed, using local storage:', error)
+        }
+      }
+
+      try {
+        saved.push(await saveLocalDocument(employeeId, file, type))
+      } catch (error) {
+        console.error('Employee document local upload failed:', error)
+        throw httpError.invalidUpload(
+          'Document storage is unavailable. Please try again or contact an administrator.',
+        )
+      }
     }
   }
 
@@ -194,6 +311,16 @@ export async function destroyStoredUpload(storageKey: string) {
   if (!parsed) {
     return
   }
+
+  if (parsed.kind === 'local') {
+    const absolutePath = path.resolve(UPLOAD_ROOT, parsed.relativePath)
+    if (!absolutePath.startsWith(UPLOAD_ROOT)) {
+      return
+    }
+    await unlink(absolutePath).catch(() => undefined)
+    return
+  }
+
   await cloudinary.uploader
     .destroy(parsed.publicId, {
       resource_type: parsed.resourceType,
@@ -201,6 +328,25 @@ export async function destroyStoredUpload(storageKey: string) {
       invalidate: true,
     })
     .catch(() => undefined)
+}
+
+async function readLocalProfilePhoto(employeeId: string) {
+  const dir = employeeDir(employeeId)
+  let entries: string[] = []
+  try {
+    entries = await readdir(dir)
+  } catch {
+    throw httpError.notFound('File not found.')
+  }
+  const fileName = entries.find((name) => name.startsWith('profile.'))
+  if (!fileName) {
+    throw httpError.notFound('File not found.')
+  }
+  const absolutePath = path.resolve(dir, fileName)
+  if (!absolutePath.startsWith(dir)) {
+    throw httpError.notFound('File not found.')
+  }
+  return readFile(absolutePath)
 }
 
 export async function readEmployeeFile(employeeId: string, storageKey: string) {
@@ -212,19 +358,47 @@ export async function readEmployeeFile(employeeId: string, storageKey: string) {
     return Buffer.from(await response.arrayBuffer())
   }
 
+  // Local profile photo URL stored as /api/employees/:id/photo
+  if (storageKey.startsWith('/api/employees/') && storageKey.endsWith('/photo')) {
+    return readLocalProfilePhoto(employeeId)
+  }
+
   const parsed = parseStorageKey(storageKey)
-  if (parsed) {
+  if (parsed?.kind === 'local') {
+    const absolutePath = path.resolve(UPLOAD_ROOT, parsed.relativePath)
+    if (!absolutePath.startsWith(UPLOAD_ROOT)) {
+      throw httpError.notFound('File not found.')
+    }
+    try {
+      return await readFile(absolutePath)
+    } catch {
+      throw httpError.notFound('File not found.')
+    }
+  }
+
+  if (parsed?.kind === 'cloudinary') {
     return downloadFromCloudinary(parsed.publicId, parsed.resourceType, parsed.deliveryType)
   }
 
+  // Legacy relative path under the employee folder (e.g. profile.jpg)
   const absolutePath = path.resolve(employeeDir(employeeId), storageKey)
   if (!absolutePath.startsWith(employeeDir(employeeId))) {
     throw httpError.notFound('File not found.')
   }
-  return readFile(absolutePath)
+  try {
+    return await readFile(absolutePath)
+  } catch {
+    throw httpError.notFound('File not found.')
+  }
 }
 
 export async function removeEmployeeFiles(employeeId: string) {
+  await rm(employeeDir(employeeId), { recursive: true, force: true }).catch(() => undefined)
+
+  if (!cloudinaryConfigured()) {
+    return
+  }
+
   const prefix = employeePrefix(employeeId)
   const attempts = [
     { resource_type: 'image' as const, type: 'upload' as const },

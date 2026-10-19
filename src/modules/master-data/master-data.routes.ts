@@ -100,6 +100,7 @@ masterDataRouter.get('/options', async (req, res, next) => {
         status: item.status,
         sortOrder: item.sortOrder,
         behaviorKey: item.behaviorKey,
+        isSystem: item.isSystem,
         extras: item.extras,
       })),
     })

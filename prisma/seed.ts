@@ -1,5 +1,10 @@
-import 'dotenv/config'
+import dotenv from 'dotenv'
+import path from 'path'
 import { PrismaClient, type ActivityType, type Prisma } from '../generated/prisma/index'
+
+dotenv.config({ path: path.join(process.cwd(), '.env') })
+const nodeEnv = process.env.NODE_ENV || 'development'
+dotenv.config({ path: path.join(process.cwd(), `.env.${nodeEnv}`), override: true })
 import { normalizeEmail, normalizeUsername } from '../src/modules/auth/identifier'
 import { PERMISSION_CATALOG, ROLE_DEFAULTS } from '../src/modules/auth/permission-catalog'
 import { getMasterDataCategory, MASTER_DATA_SEEDS } from '../src/modules/master-data/master-data.catalog'
@@ -882,6 +887,9 @@ async function main() {
   await upsertMasterDataSeeds()
   await alignLeadStatuses()
 
+  // Initial/demo country→team rules only. Existing admin-managed rules are not overwritten
+  // unless SEED_OVERWRITE_COUNTRY_RULES=true (explicit reset for local demo rebuilds).
+  const overwriteCountryRules = process.env.SEED_OVERWRITE_COUNTRY_RULES === 'true'
   const countryTeamMap: Array<{ countryCode: string; teamKey: string }> = [
     { countryCode: 'CA', teamKey: 'canada_team' },
     { countryCode: 'UK', teamKey: 'uk_team' },
@@ -889,14 +897,25 @@ async function main() {
     { countryCode: 'US', teamKey: 'team_b' },
     { countryCode: 'DE', teamKey: 'canada_team' },
   ]
+  const missingCountryTeams: string[] = []
   for (const rule of countryTeamMap) {
     const team = await prisma.team.findUnique({ where: { key: rule.teamKey } })
-    if (!team) continue
+    if (!team) {
+      missingCountryTeams.push(`${rule.countryCode}→${rule.teamKey}`)
+      continue
+    }
     await prisma.countryAssignmentRule.upsert({
       where: { countryCode: rule.countryCode },
-      update: { teamId: team.id, isActive: true },
+      update: overwriteCountryRules
+        ? { teamId: team.id, isActive: true, defaultOwnerId: null }
+        : {},
       create: { countryCode: rule.countryCode, teamId: team.id, isActive: true },
     })
+  }
+  if (missingCountryTeams.length > 0) {
+    console.warn(
+      `[seed] Skipped country assignment rules (team missing): ${missingCountryTeams.join(', ')}`,
+    )
   }
 
   const adminRole = await prisma.role.findUniqueOrThrow({ where: { key: 'admin' } })
