@@ -12,6 +12,7 @@ import { auditRouter } from "./modules/audit/audit.routes";
 import { attachSession } from "./modules/auth/attach-session.middleware";
 import { authRouter } from "./modules/auth/auth.routes";
 import { campaignsRouter } from "./modules/campaigns/campaigns.routes";
+import { countryAssignmentRouter } from "./modules/country-assignment/country-assignment.routes";
 import { communicationsRouter } from "./modules/communications/communications.routes";
 import { emailRouter } from "./modules/email/email.routes";
 import { employeesRouter } from "./modules/employees/employees.routes";
@@ -111,6 +112,7 @@ export function createApp() {
   app.use("/api/roles", rolesRouter);
   app.use("/api/permissions", permissionsRouter);
   app.use("/api/master-data", masterDataRouter);
+  app.use("/api/country-assignment-rules", countryAssignmentRouter);
   app.use("/api/service-items", serviceItemsRouter);
   app.use("/api/packages", packagesRouter);
   app.use("/api/leads/:leadId/service-offers", serviceOffersRouter);

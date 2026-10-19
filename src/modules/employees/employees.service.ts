@@ -382,6 +382,19 @@ export function canManageEmployeeDocuments(auth: AuthContext) {
   return hasPermission(auth.permissions, "employee_document:manage");
 }
 
+async function syncLinkedUserPhoto(
+  userId: string | null | undefined,
+  photoUrl: string | null,
+) {
+  if (!userId || !photoUrl) {
+    return;
+  }
+  await prisma.user.update({
+    where: { id: userId },
+    data: { photoUrl },
+  });
+}
+
 async function syncCrmAccountForEmploymentStatus(
   employee: { userId: string | null },
   statusCode: string | null | undefined,
@@ -579,7 +592,7 @@ export async function listEmployees(
   const employees = await prisma.employee.findMany({
     where: listWhere(auth, query),
     include: employeeInclude,
-    orderBy: [{ fullName: "asc" }, { employeeCode: "asc" }],
+    orderBy: [{ createdAt: "desc" }, { employeeCode: "desc" }],
   });
   return employees.map((employee) => serializeEmployee(employee, auth));
 }
@@ -993,6 +1006,8 @@ export async function createEmployee(
       include: employeeInclude,
     });
 
+    await syncLinkedUserPhoto(createdUserId, photoFile?.url ?? null);
+
     await writeAuditLog({
       userId: auth.user.id,
       action: "EMPLOYEE_CREATED",
@@ -1152,6 +1167,13 @@ export async function updateEmployee(
       },
       include: employeeInclude,
     });
+
+    if (photoFile) {
+      await syncLinkedUserPhoto(
+        employee.userId ?? createdUserId ?? current.userId,
+        photoFile.url,
+      );
+    }
 
     const invitedEmailChanged =
       Boolean(current.userId) &&
@@ -1360,6 +1382,7 @@ export async function updateEmployeePhoto(
     data: { photoUrl: photoFile.url },
     include: employeeInclude,
   });
+  await syncLinkedUserPhoto(employee.userId, photoFile.url);
   await writeAuditLog({
     userId: auth.user.id,
     action: "EMPLOYEE_PHOTO_UPDATED",

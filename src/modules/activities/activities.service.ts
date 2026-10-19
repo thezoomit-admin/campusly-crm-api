@@ -397,9 +397,21 @@ function auditDetails(
       }-${entityId.replace(/-/g, "").slice(-4).toUpperCase()}`
     : "";
   const from = stringify(
-    metadata?.from ?? metadata?.previous ?? metadata?.before,
+    metadata?.from ??
+      metadata?.fromOwnerName ??
+      metadata?.previous ??
+      metadata?.before,
   );
-  const to = stringify(metadata?.to ?? metadata?.next ?? metadata?.after);
+  const to = stringify(
+    metadata?.to ??
+      metadata?.toOwnerName ??
+      metadata?.next ??
+      metadata?.after,
+  );
+  if (action === "LEAD_ASSIGNED" && to) {
+    const fromLabel = from || "Unassigned";
+    return `Lead assigned from ${fromLabel} to ${to}`;
+  }
   if (from && to) {
     return `${humanize(action)}${related ? ` · ${related}` : ""}: ${from} → ${to}`;
   }
@@ -415,6 +427,11 @@ function auditDetails(
 function skipAuditAction(action: string) {
   return (
     action.startsWith("ACTIVITY_") ||
+    // Follow-up create/complete/reschedule already write Activity rows.
+    action === "FOLLOW_UP_CREATED" ||
+    action === "FOLLOW_UP_COMPLETED" ||
+    action === "FOLLOW_UP_RESCHEDULED" ||
+    action === "FOLLOW_UP_CANCELLED" ||
     action === "LEAD_STATUS_CHANGED" ||
     action === "LEAD_CLOSED" ||
     action === "LEAD_REOPENED" ||

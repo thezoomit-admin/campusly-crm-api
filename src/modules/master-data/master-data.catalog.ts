@@ -35,7 +35,7 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     name: "Lead Source",
     group: "Lead Management",
     storage: "generic",
-    codePolicy: "recommended",
+    codePolicy: "required",
     extraFields: "none",
   },
   {

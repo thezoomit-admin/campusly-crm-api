@@ -39,7 +39,27 @@ const userAuthInclude = {
   },
   permissionOverrides: { include: { permission: true } },
   dataScopes: true,
+  employee: { select: { photoUrl: true } },
 } as const;
+
+function resolveAuthPhotoUrl(
+  photoUrl?: string | null,
+  employeePhotoUrl?: string | null,
+  updatedAt?: Date | null,
+) {
+  const raw = photoUrl?.trim() || employeePhotoUrl?.trim() || null;
+  if (!raw) {
+    return null;
+  }
+  // Local photo routes reuse a stable path; bust browser cache after replacements.
+  if (!raw.startsWith("/")) {
+    return raw;
+  }
+  const version = updatedAt ? new Date(updatedAt).getTime() : Date.now();
+  const parsed = new URL(raw, "http://local.invalid");
+  parsed.searchParams.set("v", String(version));
+  return `${parsed.pathname}?${parsed.searchParams.toString()}`;
+}
 
 export function hashSessionToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -85,6 +105,7 @@ export function buildAuthContext(input: {
     username: string;
     mobile: string;
     photoUrl?: string | null;
+    updatedAt?: Date | null;
     status: "ACTIVE" | "INACTIVE" | "SUSPENDED" | "INVITED";
     departmentId: string | null;
     teamId: string | null;
@@ -100,6 +121,7 @@ export function buildAuthContext(input: {
       permission: { resource: string; action: string };
     }>;
     dataScopes: Array<{ resource: string; scope: DataScope }>;
+    employee?: { photoUrl?: string | null } | null;
   };
 }): AuthContext {
   const permissions = mergePermissions(
@@ -122,7 +144,11 @@ export function buildAuthContext(input: {
       email: input.user.email,
       username: input.user.username,
       mobile: input.user.mobile,
-      photoUrl: input.user.photoUrl ?? null,
+      photoUrl: resolveAuthPhotoUrl(
+        input.user.photoUrl,
+        input.user.employee?.photoUrl,
+        input.user.updatedAt,
+      ),
       status: input.user.status,
       departmentId: input.user.departmentId,
       teamId: input.user.teamId,

@@ -17,6 +17,8 @@ export type SystemFollowUpInput = {
   reason: string
   actorUserId?: string | null
   meta?: { ipAddress?: string; userAgent?: string }
+  /** When false, create the follow-up without Activity/Audit feed entries. Default true. */
+  logActivity?: boolean
 }
 
 /**
@@ -57,7 +59,7 @@ export async function createSystemFollowUp(input: SystemFollowUpInput) {
     },
   })
 
-  if (input.actorUserId) {
+  if (input.actorUserId && input.logActivity !== false) {
     await prisma.activity.create({
       data: {
         type: 'FOLLOW_UP',
