@@ -52,8 +52,15 @@ export async function listNotifications(
 
   const limit = Math.min(100, Math.max(5, query.limit || 20));
   const scope = query.scope === "team" && canViewTeam(auth) ? "team" : "own";
+  // Unread reminders stay visible even if expiresAt was incorrectly set to dueAt.
   const filters: Prisma.NotificationWhereInput[] = [
-    { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+    {
+      OR: [
+        { expiresAt: null },
+        { expiresAt: { gt: new Date() } },
+        { AND: [{ status: "Unread" }, { kind: "reminder" }] },
+      ],
+    },
   ];
 
   if (scope === "own") {

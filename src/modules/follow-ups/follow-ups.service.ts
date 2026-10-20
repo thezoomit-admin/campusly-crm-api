@@ -226,6 +226,12 @@ async function createScheduledActivity(
     notes?: string | null;
     outcome?: string;
     nextAction?: string | null;
+    followUpId?: string | null;
+    event?:
+      | "FOLLOW_UP_CREATED"
+      | "FOLLOW_UP_RESCHEDULED"
+      | "FOLLOW_UP_COMPLETED"
+      | "FOLLOW_UP_CANCELLED";
     meta: AuditMeta;
   },
 ) {
@@ -242,6 +248,11 @@ async function createScheduledActivity(
       nextDate: input.dueAt,
       ipAddress: input.meta.ipAddress,
       userAgent: input.meta.userAgent,
+      metadata: {
+        event: input.event || "FOLLOW_UP_CREATED",
+        followUpId: input.followUpId || null,
+        followUpType: input.type,
+      },
     },
   });
 }
@@ -442,6 +453,8 @@ export async function scheduleLeadFollowUp(
       dueAt,
       notes: `Follow-up scheduled (${type}) — ${nextAction}`,
       nextAction,
+      followUpId: followUp.id,
+      event: "FOLLOW_UP_CREATED",
       meta,
     });
   }
@@ -461,6 +474,18 @@ export async function scheduleLeadFollowUp(
       supersededFollowUpIds: superseded.map((item) => item.id),
     },
   });
+
+  // If reminder is already due (or due within ~2 min), don't wait for the job tick.
+  if (
+    reminderAt &&
+    reminderAt.getTime() <= Date.now() + 2 * 60 * 1000
+  ) {
+    void import("../notifications/notifications.scheduler")
+      .then(({ dispatchDueReminders }) => dispatchDueReminders())
+      .catch((error) => {
+        console.error("[follow-ups] Immediate reminder dispatch failed:", error);
+      });
+  }
 
   return { followUp: serializeFollowUp(followUp) };
 }
@@ -598,6 +623,11 @@ export async function completeFollowUp(
         nextAction,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
+        metadata: {
+          event: "FOLLOW_UP_COMPLETED",
+          followUpId: current.id,
+          followUpType: current.type,
+        },
       },
     });
   }
@@ -645,6 +675,8 @@ export async function completeFollowUp(
       dueAt: nextDueAt,
       notes: `Next follow-up scheduled (${nextType})`,
       nextAction,
+      followUpId: created.id,
+      event: "FOLLOW_UP_CREATED",
       meta,
     });
   }
@@ -764,6 +796,8 @@ export async function rescheduleFollowUp(
     notes: `Follow-up rescheduled — ${reason}`,
     outcome: "Rescheduled",
     nextAction: current.nextAction,
+    followUpId: created.id,
+    event: "FOLLOW_UP_RESCHEDULED",
     meta,
   });
 
@@ -845,6 +879,11 @@ export async function cancelFollowUp(
         nextAction: current.nextAction,
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
+        metadata: {
+          event: "FOLLOW_UP_CANCELLED",
+          followUpId: current.id,
+          followUpType: current.type,
+        },
       },
     });
   }

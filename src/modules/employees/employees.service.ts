@@ -1098,10 +1098,7 @@ export async function updateEmployee(
       });
       reset = invited.body;
     } else if (current.userId && data.role) {
-      const nextStatus =
-        current.user?.status === "INVITED" && data.userStatus === "ACTIVE"
-          ? "INVITED"
-          : data.userStatus;
+      const nextStatus = data.userStatus;
       const nextEmail = normalizeEmail(data.officialEmail);
       const emailChanged = nextEmail !== normalizeEmail(current.officialEmail);
       if (emailChanged && current.user?.status !== "INVITED") {

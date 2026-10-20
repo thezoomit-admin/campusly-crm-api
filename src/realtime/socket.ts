@@ -19,18 +19,39 @@ export type EmailInboundPayload = {
   preview: string
 }
 
-type NotificationCreatedPayload = {
+export type NotificationCreatedPayload = {
   notification: {
     id: string
     title: string
     body: string | null
     link: string | null
     type: string | null
+    eventType?: string | null
+    kind?: string
+    priority?: string
     status: string
+    channel?: string
     leadId: string | null
     followUpId: string | null
+    deliveryStatus?: string
     createdAt: string
     readAt: string | null
+    archivedAt?: string | null
+    expiresAt?: string | null
+    scheduledAt?: string | null
+    sentAt?: string | null
+    browser?: boolean
+    payload?: Record<string, unknown> | null
+    actions?: Array<{ key: string; label: string; href?: string }>
+    lead?: { id: string; code: string; name: string } | null
+    recipientName?: string | null
+    deliveries?: Array<{
+      channel: string
+      status: string
+      attempts: number
+      lastError: string | null
+      sentAt: string | null
+    }>
   }
   unreadCount: number
 }

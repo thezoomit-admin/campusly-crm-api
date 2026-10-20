@@ -234,7 +234,6 @@ usersRouter.post('/:id/change-password', requirePermission('user:configure'), as
       req.auth!,
       routeParam(req.params.id),
       {
-        currentPassword: req.body?.currentPassword,
         newPassword: req.body?.newPassword,
         confirmPassword: req.body?.confirmPassword,
       },

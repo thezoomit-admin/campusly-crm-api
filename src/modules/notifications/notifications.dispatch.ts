@@ -48,8 +48,28 @@ function asStringList(value: Prisma.JsonValue | null | undefined) {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+const REMINDER_EVENT_TYPES = new Set([
+  "follow_up_reminder",
+  "counselling_reminder",
+  "meeting_reminder",
+  "follow_up_due",
+]);
+
 export async function ensureNotificationConfigs() {
   for (const event of NOTIFICATION_EVENTS) {
+    // Reminder/due events must stay deliverable — sync mandatory in-app from catalog
+    // so older DB rows (mandatory:false) cannot silently drop owner notifications.
+    const reminderSync = REMINDER_EVENT_TYPES.has(event.eventType)
+      ? {
+          enabled: event.enabled,
+          mandatory: event.mandatory,
+          priority: event.priority,
+          inApp: event.inApp,
+          label: event.label,
+          description: event.description,
+        }
+      : {};
+
     await prisma.notificationEventConfig.upsert({
       where: { eventType: event.eventType },
       create: {
@@ -68,7 +88,7 @@ export async function ensureNotificationConfigs() {
         overdueAfterMinutes: event.overdueAfterMinutes,
         statusAllowlist: event.statusAllowlist ?? undefined,
       },
-      update: {},
+      update: reminderSync,
     });
   }
 }
@@ -355,13 +375,28 @@ export async function dispatchCrmEvent(input: CrmNotificationInput) {
   });
   const created = [];
 
+  if (users.length === 0) {
+    console.error(
+      "[notifications] No ACTIVE recipient users for notification.",
+      input.eventType,
+      input.dedupeKey,
+      recipientIds,
+    );
+    return [];
+  }
+
   for (const user of users) {
     const pref = await prisma.notificationPreference.findUnique({
       where: {
         userId_eventType: { userId: user.id, eventType: input.eventType },
       },
     });
-    const channels = channelsFor(config, pref);
+    const channels = { ...channelsFor(config, pref) };
+    // Reminders always deliver in-app to the owner (socket + bell), even if a
+    // stale preference row disabled the channel.
+    if (input.kind === "reminder" || REMINDER_EVENT_TYPES.has(input.eventType)) {
+      channels.inApp = true;
+    }
     if (
       !channels.inApp &&
       !channels.email &&
