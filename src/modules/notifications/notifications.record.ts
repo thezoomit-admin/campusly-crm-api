@@ -35,6 +35,23 @@ type NotificationRow = {
   user?: { id: string; fullName: string } | null;
 };
 
+function serializeActions(value: Prisma.JsonValue): NotificationAction[] {
+  if (!Array.isArray(value)) return [];
+  const actions: NotificationAction[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const key = typeof item.key === "string" ? item.key : "";
+    const label = typeof item.label === "string" ? item.label : "";
+    if (!key || !label) continue;
+    actions.push({
+      key,
+      label,
+      ...(typeof item.href === "string" ? { href: item.href } : {}),
+    });
+  }
+  return actions;
+}
+
 export function serializeNotification(row: NotificationRow) {
   const browser = (row.deliveries || []).some((item) => item.channel === "browser" && item.status === "Sent");
   return {
@@ -57,8 +74,11 @@ export function serializeNotification(row: NotificationRow) {
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     scheduledAt: row.scheduledAt ? row.scheduledAt.toISOString() : null,
     sentAt: row.sentAt ? row.sentAt.toISOString() : null,
-    payload: row.payload && typeof row.payload === "object" && !Array.isArray(row.payload) ? row.payload : null,
-    actions: Array.isArray(row.actions) ? row.actions : [],
+    payload:
+      row.payload && typeof row.payload === "object" && !Array.isArray(row.payload)
+        ? (row.payload as Record<string, unknown>)
+        : null,
+    actions: serializeActions(row.actions),
     browser,
     lead: row.lead ? { id: row.lead.id, code: row.lead.code, name: row.lead.name } : null,
     recipientName: row.user?.fullName || null,
@@ -77,12 +97,16 @@ export async function countUnreadNotifications(userId: string) {
     where: {
       userId,
       status: "Unread",
-      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      OR: [
+        { expiresAt: null },
+        { expiresAt: { gt: new Date() } },
+        { kind: "reminder" },
+      ],
     },
   });
 }
 
-function pushNotificationCreated(userId: string, row: NotificationRow) {
+export function pushNotificationCreated(userId: string, row: NotificationRow) {
   void countUnreadNotifications(userId)
     .then((unreadCount) => {
       emitNotificationCreated(userId, {
@@ -124,7 +148,13 @@ export async function createNotification(input: {
       where: { dedupeKey: input.dedupeKey },
       include: notificationInclude,
     });
-    if (existing) return existing;
+    if (existing) {
+      // Re-emit so a connected client still gets toast/bell if the first emit was missed.
+      if (existing.status === "Unread") {
+        pushNotificationCreated(input.userId, existing);
+      }
+      return existing;
+    }
   }
 
   const now = new Date();

@@ -73,6 +73,11 @@ export async function createSystemFollowUp(input: SystemFollowUpInput) {
         nextDate: input.dueAt,
         ipAddress: input.meta?.ipAddress,
         userAgent: input.meta?.userAgent,
+        metadata: {
+          event: 'FOLLOW_UP_CREATED',
+          followUpId: followUp.id,
+          followUpType: followUp.type,
+        },
       },
     })
     await writeAuditLog({

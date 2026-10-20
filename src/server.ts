@@ -124,7 +124,7 @@ async function bootstrap() {
       console.log("─".repeat(60));
       followUpJobTimer = startFollowUpJobs();
       console.log(
-        "⏱️  Follow-up jobs started (overdue + reminders, every 1 min)",
+        "⏱️  Follow-up jobs started (overdue + reminders, every 30s)",
       );
       offerExpiryTimer = startOfferExpiryJob();
       emailInboundTimer = startEmailInboundSyncJob();

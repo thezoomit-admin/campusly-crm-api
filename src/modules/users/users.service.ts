@@ -16,7 +16,7 @@ import {
   userDirectoryScope,
 } from "../auth/access";
 import { normalizeEmail, normalizeUsername } from "../auth/identifier";
-import { hashPassword, verifyPassword } from "../auth/password";
+import { hashPassword } from "../auth/password";
 import { sendAccountInvite } from "../auth/password-reset.service";
 import type { AuthContext } from "../auth/session.service";
 import { revokeSession, revokeUserSessions } from "../auth/session.service";
@@ -759,11 +759,6 @@ export async function updateUserStatus(
   if (!existing) {
     throw httpError.notFound("User not found.");
   }
-  if (existing.status === "INVITED" && status === "ACTIVE") {
-    throw httpError.badRequest(
-      "Invited users must set a password from their email link before becoming Active.",
-    );
-  }
   if (status === "INVITED" && existing.status !== "INVITED") {
     throw httpError.badRequest("Only new accounts can be marked as Invited.");
   }
@@ -1060,7 +1055,6 @@ export async function adminChangeUserPassword(
   auth: AuthContext,
   userId: string,
   input: {
-    currentPassword: unknown;
     newPassword: unknown;
     confirmPassword: unknown;
   },
@@ -1068,16 +1062,11 @@ export async function adminChangeUserPassword(
 ) {
   await assertCanViewUser(auth, userId);
 
-  const currentPassword =
-    typeof input.currentPassword === "string" ? input.currentPassword : "";
   const newPassword =
     typeof input.newPassword === "string" ? input.newPassword : "";
   const confirmPassword =
     typeof input.confirmPassword === "string" ? input.confirmPassword : "";
 
-  if (!currentPassword) {
-    throw httpError.badRequest("Current password is required.");
-  }
   if (newPassword.length < config.minPasswordLength) {
     throw httpError.badRequest(
       `Password must be at least ${config.minPasswordLength} characters.`,
@@ -1085,17 +1074,6 @@ export async function adminChangeUserPassword(
   }
   if (newPassword !== confirmPassword) {
     throw httpError.badRequest("New password and confirmation do not match.");
-  }
-
-  const actor = await prisma.user.findUniqueOrThrow({
-    where: { id: auth.user.id },
-  });
-  const actorMatches = await verifyPassword(actor.passwordHash, currentPassword);
-  if (!actorMatches) {
-    throw httpError.badRequest(
-      "Current password is incorrect.",
-      "INVALID_PASSWORD",
-    );
   }
 
   const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });

@@ -624,12 +624,18 @@ export async function listActivityFeed(
         metadata,
       };
     }
+    const followUpEvent = stringify(metadata?.event).toUpperCase();
+    const actionKey =
+      row.type === "FOLLOW_UP" && followUpEvent.startsWith("FOLLOW_UP")
+        ? followUpEvent
+        : row.type;
+
     return {
       id: `activity:${row.id}`,
       source: "activity" as const,
       category: typeToCategory(row.type),
       action: actionLabel(row.type),
-      actionKey: row.type,
+      actionKey,
       module: "Communication",
       details: activityDetails(row),
       relatedName: row.relatedName,
