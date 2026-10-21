@@ -1,10 +1,8 @@
 import path from 'path'
-import dotenv from 'dotenv'
 import { PrismaClient } from '../generated/prisma/index'
+import { loadEnv } from '../src/loadEnv'
 
-const root = path.join(__dirname, '..')
-dotenv.config({ path: path.join(root, '.env') })
-dotenv.config({ path: path.join(root, `.env.${process.env.NODE_ENV || 'development'}`), override: true })
+loadEnv(path.join(__dirname, '..'))
 
 const prisma = new PrismaClient()
 

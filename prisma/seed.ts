@@ -1,10 +1,8 @@
-import dotenv from 'dotenv'
-import path from 'path'
 import { PrismaClient, type ActivityType, type Prisma } from '../generated/prisma/index'
+import { loadEnv } from '../src/loadEnv'
 
-dotenv.config({ path: path.join(process.cwd(), '.env') })
-const nodeEnv = process.env.NODE_ENV || 'development'
-dotenv.config({ path: path.join(process.cwd(), `.env.${nodeEnv}`), override: true })
+loadEnv()
+
 import { normalizeEmail, normalizeUsername } from '../src/modules/auth/identifier'
 import { PERMISSION_CATALOG, ROLE_DEFAULTS } from '../src/modules/auth/permission-catalog'
 import { getMasterDataCategory, MASTER_DATA_SEEDS } from '../src/modules/master-data/master-data.catalog'

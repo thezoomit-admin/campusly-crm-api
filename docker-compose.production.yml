@@ -5,6 +5,7 @@
 #   App variables (DATABASE_URL, SMTP_*, CLOUDINARY_*, ...) are passed to the
 #   container from ENV_FILE, which defaults to that same `.env`.
 #
+#   Local files: `.env` (shared defaults, no NODE_ENV) plus `.env.development` or `.env.production`.
 #   Dokploy:  set the variables in the Environment tab, deploy.
 #   Manual:   ENV_FILE=.env.production docker compose --env-file .env.production \
 #               -f docker-compose.production.yml up -d --build

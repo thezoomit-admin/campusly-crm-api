@@ -1,12 +1,6 @@
-import dotenv from 'dotenv'
-import path from 'path'
+import { loadEnv } from './loadEnv'
 
-dotenv.config({ path: path.join(process.cwd(), '.env') })
-const nodeEnv = process.env.NODE_ENV || 'development'
-dotenv.config({
-  path: path.join(process.cwd(), `.env.${nodeEnv}`),
-  override: true,
-})
+const nodeEnv = loadEnv()
 
 export const SESSION_COOKIE = 'crm_session'
 

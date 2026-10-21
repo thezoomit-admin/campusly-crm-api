@@ -8,6 +8,7 @@ import { normalizeInboundBody, receiveInboundEmail } from '../email/email.servic
 import { validateWebsiteEnquiry } from './website-enquiry.validation'
 import { WEBSITE_MESSAGES } from './website-forms'
 import { acceptMetaWebhook, assertMetaWebhookAuth, verifyMetaWebhook } from '../meta-leads/meta-leads.routes'
+import { isMetaPageWebhook } from '../meta-leads/meta-leads.parse'
 import type { MetaPlatformCode } from '../meta-leads/meta-leads.constants'
 
 export const webhooksRouter = Router()
@@ -117,15 +118,39 @@ function metaWebhookGet(req: Parameters<typeof verifyMetaWebhook>[0], res: { sta
   res.sendStatus(403)
 }
 
+function logMetaPageResult(result: { message?: string; results?: unknown[] }) {
+  const results = Array.isArray(result.results) ? result.results : []
+  for (const item of results) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as { success?: boolean; message?: string; externalId?: string }
+    if (row.success === false) {
+      console.error('[webhooks/meta] lead failed', row.externalId || '', row.message || result.message || '')
+    }
+  }
+}
+
 async function metaWebhookPost(
   req: Parameters<typeof assertMetaWebhookAuth>[0],
-  res: { status: (code: number) => { json: (body: unknown) => void } },
+  res: { status: (code: number) => { json: (body: unknown) => void; send: (body: string) => void } },
   next: (error?: unknown) => void,
   platform: MetaPlatformCode,
 ) {
   try {
     assertMetaWebhookAuth(req)
-    const result = await acceptMetaWebhook((req.body || {}) as Record<string, unknown>, platform)
+    const body = (req.body || {}) as Record<string, unknown>
+
+    // Meta only needs a fast 200. Lead fetch and CRM save continue after the ack.
+    if (isMetaPageWebhook(body)) {
+      res.status(200).send('EVENT_RECEIVED')
+      void acceptMetaWebhook(body, platform)
+        .then(logMetaPageResult)
+        .catch((error) => {
+          console.error('[webhooks/meta]', error)
+        })
+      return
+    }
+
+    const result = await acceptMetaWebhook(body, platform)
     const created = 'created' in result && result.created === true
     res.status(created ? 201 : 200).json(result)
   } catch (error) {
