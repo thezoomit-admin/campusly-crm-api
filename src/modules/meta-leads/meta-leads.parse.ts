@@ -76,6 +76,18 @@ export function parseFormType(value: string): MetaFormTypeCode {
   return 'STUDY_ABROAD'
 }
 
+function isMetaDummyPhone(value: string) {
+  const key = value.trim().toLowerCase()
+  if (!key) return false
+  if (normalizePhone(key).length >= 8) return false
+  return key.includes('dummy data') || key.includes('<test lead:')
+}
+
+function metaTestPhone() {
+  const unique = `${Date.now()}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`.slice(-8)
+  return `000${unique}`
+}
+
 export function parsePlatform(value: string, fallback: MetaPlatformCode = 'FACEBOOK'): MetaPlatformCode {
   const key = value.trim().toLowerCase()
   if (!key) return fallback
@@ -96,10 +108,8 @@ export function parseMetaLeadPayload(
   const formRaw = pick(body, fields, ['formType', 'form_type', 'formName', 'form_name', 'form'])
   const formType = parseFormType(formRaw)
   const fullName = asOptionalString(pick(body, fields, ['fullName', 'full_name', 'name', 'senderName']), 120)
-  const phone = asOptionalString(
-    pick(body, fields, ['phone', 'phone_number', 'phoneNumber', 'senderPhone', 'mobile', 'mobile_number']),
-    40,
-  )
+  const phoneRaw = pick(body, fields, ['phone', 'phone_number', 'phoneNumber', 'senderPhone', 'mobile', 'mobile_number'])
+  const phone = isMetaDummyPhone(phoneRaw) ? metaTestPhone() : asOptionalString(phoneRaw, 40)
   const phoneNormalized = phone ? normalizePhone(phone) : null
   const emailRaw = asOptionalString(pick(body, fields, ['email', 'senderEmail', 'email_address']), 200)
   const email = emailRaw ? emailRaw.toLowerCase() : null
