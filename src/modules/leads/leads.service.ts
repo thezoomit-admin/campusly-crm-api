@@ -3060,7 +3060,7 @@ export async function listLeadPool(
       prisma.lead.findMany({
         where: listWhere,
         include: leadInclude,
-        orderBy: { createdAt: "asc" },
+        orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
         take: limit,
       }),
