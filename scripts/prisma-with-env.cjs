@@ -1,15 +1,9 @@
 const path = require('path')
 const { spawn } = require('child_process')
-const dotenv = require('dotenv')
+const { loadEnv } = require('./load-env.cjs')
 
 const root = path.join(__dirname, '..')
-const nodeEnv = process.env.NODE_ENV || 'development'
-
-dotenv.config({ path: path.join(root, '.env') })
-dotenv.config({
-  path: path.join(root, `.env.${nodeEnv}`),
-  override: true,
-})
+loadEnv(root)
 
 if (!process.env.DIRECT_URL && process.env.DATABASE_URL) {
   process.env.DIRECT_URL = process.env.DATABASE_URL
