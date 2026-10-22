@@ -21,15 +21,18 @@ type AuditMeta = { ipAddress?: string; userAgent?: string }
 export const HANDOVER_MESSAGES = {
   permission: WORKSPACE_ACCESS_DENIED,
   failed: 'Unable to assign the lead to the selected Counsellor. Please try again.',
-  counsellor: 'Please select a Counsellor.',
+  counsellor: 'Select a counsellor.',
   notQualified: 'Only a Qualified lead can be handed over to a Counsellor.',
   same: 'This lead is already assigned to the selected Counsellor.',
   conflict: 'This lead changed before the handover completed. Refresh and try again.',
   note: 'Handover note is invalid.',
-  tooLong: 'Cannot exceed 2000 characters.',
+  tooLong: 'Cannot exceed 500 characters.',
+  requirement: 'Enter what the student is looking for.',
+  country: 'Select a preferred country.',
+  summary: 'Enter the initial conversation summary.',
 }
 
-const NOTE_LIMIT = 2000
+const NOTE_LIMIT = 500
 
 type HandoverNoteInput = {
   studentRequirement: string | null
@@ -92,16 +95,27 @@ async function parseHandoverNote(body: Record<string, unknown>, fields: Record<s
     fields.note = HANDOVER_MESSAGES.note
   }
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
-  const country = await resolveMasterCode('COUNTRY', source.preferredCountryCode, 'preferredCountryCode', fields)
+  const studentRequirement = noteText(source.studentRequirement, 'studentRequirement', fields)
+  const conversationSummary = noteText(source.conversationSummary, 'conversationSummary', fields)
+  if (!studentRequirement && !fields.studentRequirement) {
+    fields.studentRequirement = HANDOVER_MESSAGES.requirement
+  }
+  if (!conversationSummary && !fields.conversationSummary) {
+    fields.conversationSummary = HANDOVER_MESSAGES.summary
+  }
+  const country = await resolveMasterCode('COUNTRY', source.preferredCountryCode, 'preferredCountryCode', fields, {
+    required: true,
+    message: HANDOVER_MESSAGES.country,
+  })
   const intake = await resolveMasterCode('INTAKE', source.preferredIntakeCode, 'preferredIntakeCode', fields)
   return {
-    studentRequirement: noteText(source.studentRequirement, 'studentRequirement', fields),
+    studentRequirement,
     preferredCountryCode: country?.code || null,
     preferredCountry: country?.name || null,
     preferredIntakeCode: intake?.code || null,
     preferredIntake: intake?.name || null,
     academicBackground: noteText(source.academicBackground, 'academicBackground', fields),
-    conversationSummary: noteText(source.conversationSummary, 'conversationSummary', fields),
+    conversationSummary,
     importantConcern: noteText(source.importantConcern, 'importantConcern', fields),
   }
 }

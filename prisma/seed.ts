@@ -260,6 +260,33 @@ const DEMO_LEAD_PROFILE: Record<
   },
 }
 
+/** Demo applications were inserted without a lead, so the details page had no Lead ID. */
+const DEMO_APPLICATION_LEAD_CODES: Record<string, string> = {
+  'APP-3001': 'L-1007',
+  'APP-3002': 'L-1005',
+  'APP-3003': 'L-1002',
+  'APP-3004': 'L-1004',
+  'APP-3005': 'L-1003',
+  'APP-3006': 'L-1009',
+}
+
+async function linkDemoApplicationsToLeads() {
+  const leads = await prisma.lead.findMany({
+    where: { code: { in: Object.values(DEMO_APPLICATION_LEAD_CODES) } },
+    select: { id: true, code: true },
+  })
+  const leadIdByCode = new Map(leads.map((lead) => [lead.code, lead.id]))
+
+  for (const [applicationCode, leadCode] of Object.entries(DEMO_APPLICATION_LEAD_CODES)) {
+    const leadId = leadIdByCode.get(leadCode)
+    if (!leadId) continue
+    await prisma.application.updateMany({
+      where: { code: applicationCode, leadId: null },
+      data: { leadId },
+    })
+  }
+}
+
 async function enrichDemoLeads() {
   for (const [code, profile] of Object.entries(DEMO_LEAD_PROFILE)) {
     await prisma.lead.updateMany({
@@ -275,6 +302,7 @@ async function enrichDemoLeads() {
       },
     })
   }
+  await linkDemoApplicationsToLeads()
 }
 
 function dateOnly(value: string) {
@@ -733,6 +761,7 @@ async function seedPipelineDemo(userIds: string[]) {
       { code: 'APP-3006', applicantName: 'Farzana Kabir', university: 'UBC', program: 'Software Engineering', intake: 'Sep 2027', counsellorName: pick('sarah')?.fullName, counsellorId: pick('sarah')?.id, status: 'Submitted', submittedAt: dateOnly('2026-09-15') },
     ],
   })
+  await linkDemoApplicationsToLeads()
 
   await prisma.student.createMany({
     data: [
