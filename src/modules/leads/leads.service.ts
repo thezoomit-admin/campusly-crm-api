@@ -3207,15 +3207,34 @@ export async function assignLead(
     });
   }
 
+  const currentOwner = current.ownerId
+    ? await prisma.user.findUnique({
+        where: { id: current.ownerId },
+        select: { primaryRole: { select: { key: true } } },
+      })
+    : null;
+  const ownerRoleKey = currentOwner?.primaryRole?.key || null;
+  // Counsellor-owned leads stay with counsellors. Visibility is skipped the
+  // same way as handover, so a counsellor on another team can be selected.
+  const reassignCounsellor = ownerRoleKey === "counsellor";
+
   const assignee = await prisma.user.findFirst({
     where: {
       id: ownerId,
-      AND: [leadEligibleAssigneeWhere(), assigneeVisibilityWhere(auth)],
+      AND: [
+        leadEligibleAssigneeWhere(),
+        reassignCounsellor ? {} : assigneeVisibilityWhere(auth),
+        reassignCounsellor ? { primaryRole: { key: "counsellor" } } : {},
+      ],
     },
     include: { team: { select: { id: true, name: true } } },
   });
   if (!assignee) {
-    throw httpError.badRequest("The selected user cannot receive this lead.");
+    throw httpError.badRequest(
+      reassignCounsellor
+        ? "Select a counsellor to reassign this lead."
+        : "The selected user cannot receive this lead.",
+    );
   }
 
   const reason =
