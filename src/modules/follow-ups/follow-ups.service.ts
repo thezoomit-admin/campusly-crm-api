@@ -527,14 +527,32 @@ export async function createFollowUp(
     );
   }
 
+  const requestedOwnerId = asOptionalString(body.ownerId);
+  let ownerId = lead.ownerId;
+  let ownerName = lead.ownerName;
+  if (requestedOwnerId && requestedOwnerId !== lead.ownerId) {
+    const owner = await prisma.user.findUnique({
+      where: { id: requestedOwnerId },
+      select: { id: true, fullName: true, status: true },
+    });
+    if (!owner || owner.status !== "ACTIVE") {
+      throw httpError.validation(
+        { ownerId: "Select an active assignee." },
+        "Select an active assignee.",
+      );
+    }
+    ownerId = owner.id;
+    ownerName = owner.fullName;
+  }
+
   return scheduleLeadFollowUp(
     auth,
     {
       leadId: lead.id,
       leadName: lead.name,
       leadPriority: lead.priority,
-      ownerId: lead.ownerId,
-      ownerName: lead.ownerName,
+      ownerId,
+      ownerName,
       type: asString(body.type) || "Call",
       dueAt,
       priority: asString(body.priority) || undefined,
