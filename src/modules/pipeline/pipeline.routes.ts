@@ -214,6 +214,28 @@ pipelineRouter.get('/follow-ups', requirePermission('follow_up:view'), async (re
   }
 })
 
+pipelineRouter.get('/reports/overview', requirePermission('report:view'), async (req, res, next) => {
+  try {
+    const { getReportOverview } = await import('./report-overview.service')
+    res.json(
+      await getReportOverview(req.auth!, {
+        datePreset: queryString(req.query.datePreset),
+        customFrom: queryString(req.query.customFrom),
+        customTo: queryString(req.query.customTo),
+        employeeId: queryString(req.query.employeeId),
+        employeeScope: queryString(req.query.employeeScope),
+        country: queryString(req.query.country),
+        leadSource: queryString(req.query.leadSource),
+        service: queryString(req.query.service),
+        fileStatus: queryString(req.query.fileStatus),
+        paymentStatus: queryString(req.query.paymentStatus),
+      }),
+    )
+  } catch (error) {
+    next(error)
+  }
+})
+
 pipelineRouter.get('/reports', requirePermission('report:view'), async (req, res, next) => {
   try {
     const search = queryString(req.query.search)?.toLowerCase()
