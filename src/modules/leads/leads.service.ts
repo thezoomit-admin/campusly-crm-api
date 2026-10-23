@@ -2162,8 +2162,7 @@ export async function updateLeadStatus(
       console.error("[notifications] Status notification failed:", error);
     }
 
-    // Status-change form requires a next follow-up date — schedule it here so the
-    // Follow-ups table always gets a row (frontend used to create it optionally).
+    // Schedule a follow-up only when the status form includes a next follow-up date.
     if (nextFollowUpDueAt) {
       const channels = Array.isArray(body.channels)
         ? body.channels.map((item) => String(item).toUpperCase())
