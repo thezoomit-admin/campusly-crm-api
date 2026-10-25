@@ -931,7 +931,7 @@ async function hydrateLeadRows(
   const [nextFollowUps, sharedPhones, closeHistories] = await Promise.all([
     leadIds.length
       ? prisma.followUp.findMany({
-          where: { leadId: { in: leadIds }, AND: [openFollowUpWhere()] },
+          where: { leadId: { in: leadIds }, AND: [nextFollowUpDateWhere()] },
           orderBy: [
             { dueAt: { sort: "asc", nulls: "last" } },
             { createdAt: "desc" },
@@ -1301,7 +1301,7 @@ export async function getLead(auth: AuthContext, id: string) {
       prisma.followUp.findFirst({
         where: {
           leadId: id,
-          status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
+          AND: [nextFollowUpDateWhere()],
         },
         orderBy: [
           { dueAt: { sort: "asc", nulls: "last" } },
@@ -2707,6 +2707,13 @@ function openFollowUpWhere(): Prisma.FollowUpWhereInput {
   return { status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] } };
 }
 
+/** Next follow-up date ignores meetings so a scheduled meeting stays its own activity. */
+function nextFollowUpDateWhere(): Prisma.FollowUpWhereInput {
+  return {
+    AND: [openFollowUpWhere(), { type: { not: "Meeting" } }],
+  };
+}
+
 function followUpStatusLeadWhere(
   status: string | undefined,
   startToday: Date,
@@ -2863,7 +2870,7 @@ export async function listMyLeads(
         : Promise.resolve([]),
       pageIds.length
         ? prisma.followUp.findMany({
-            where: { leadId: { in: pageIds }, AND: [openFollowUpWhere()] },
+            where: { leadId: { in: pageIds }, AND: [nextFollowUpDateWhere()] },
             orderBy: [
               { dueAt: { sort: "asc", nulls: "last" } },
               { createdAt: "desc" },
