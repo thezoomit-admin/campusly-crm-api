@@ -92,11 +92,12 @@ export function serializeNotification(row: NotificationRow) {
   };
 }
 
-export async function countUnreadNotifications(userId: string) {
+export async function countUnreadNotifications(userId: string, kind?: "system" | "reminder") {
   return prisma.notification.count({
     where: {
       userId,
       status: "Unread",
+      ...(kind ? { kind } : {}),
       OR: [
         { expiresAt: null },
         { expiresAt: { gt: new Date() } },

@@ -31,6 +31,51 @@ function canViewTeam(auth: AuthContext) {
   return TEAM_ROLES.has(auth.role.key);
 }
 
+function textMatch(words: string[]): Prisma.NotificationWhereInput {
+  return {
+    OR: words.flatMap((word) => [
+      { eventType: { contains: word, mode: "insensitive" as const } },
+      { type: { contains: word, mode: "insensitive" as const } },
+    ]),
+  };
+}
+
+const CATEGORY_WORDS: Record<string, string[]> = {
+  follow_up: ["follow", "meeting", "counselling"],
+  payment: ["payment"],
+  offer: ["offer"],
+  file: ["file"],
+  security: ["permission", "security"],
+  email: ["email", "bounce"],
+  lead: ["lead"],
+};
+
+function categoryWhere(category?: string): Prisma.NotificationWhereInput | null {
+  if (!category || category === "all") return null;
+  if (category === "system") {
+    return { NOT: { OR: Object.values(CATEGORY_WORDS).map((words) => textMatch(words)) } };
+  }
+  const words = CATEGORY_WORDS[category];
+  return words ? textMatch(words) : null;
+}
+
+function hasDelivery(channel: string): Prisma.NotificationWhereInput {
+  return { OR: [{ channel }, { deliveries: { some: { channel } } }] };
+}
+
+function lacksDelivery(channel: string): Prisma.NotificationWhereInput {
+  return { AND: [{ NOT: { channel } }, { deliveries: { none: { channel } } }] };
+}
+
+function channelWhere(channel?: string): Prisma.NotificationWhereInput | null {
+  if (!channel || channel === "all") return null;
+  if (channel === "email") return hasDelivery("email");
+  if (channel === "whatsapp") return { AND: [hasDelivery("whatsapp"), lacksDelivery("email")] };
+  if (channel === "browser") return { AND: [hasDelivery("browser"), lacksDelivery("email"), lacksDelivery("whatsapp")] };
+  if (channel === "system") return { AND: [lacksDelivery("email"), lacksDelivery("whatsapp"), lacksDelivery("browser")] };
+  return null;
+}
+
 export async function listNotifications(
   auth: AuthContext,
   query: {
@@ -44,6 +89,9 @@ export async function listNotifications(
     search?: string;
     from?: string;
     to?: string;
+    kind?: string;
+    category?: string;
+    channel?: string;
   },
 ) {
   if (!hasPermission(auth.permissions, "notification:view")) {
@@ -73,6 +121,11 @@ export async function listNotifications(
     filters.push({ userId: { in: teammates.map((row) => row.id) } });
   }
 
+  if (query.kind === "system" || query.kind === "reminder") filters.push({ kind: query.kind });
+  const categoryFilter = categoryWhere(query.category);
+  if (categoryFilter) filters.push(categoryFilter);
+  const channelFilter = channelWhere(query.channel);
+  if (channelFilter) filters.push(channelFilter);
   if (query.unreadOnly) filters.push({ status: "Unread" });
   else if (query.status) filters.push({ status: query.status });
   if (query.eventType) filters.push({ eventType: query.eventType });
@@ -92,7 +145,7 @@ export async function listNotifications(
   if (to && !Number.isNaN(to.getTime())) filters.push({ createdAt: { lte: to } });
 
   const where = { AND: filters };
-  const [items, unreadCount] = await Promise.all([
+  const [items, unreadCount, unreadSystem, unreadReminder] = await Promise.all([
     prisma.notification.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -100,11 +153,15 @@ export async function listNotifications(
       include: listInclude,
     }),
     countUnreadNotifications(auth.user.id),
+    countUnreadNotifications(auth.user.id, "system"),
+    countUnreadNotifications(auth.user.id, "reminder"),
   ]);
 
   return {
     items: items.map(serializeNotification),
     unreadCount,
+    unreadSystem,
+    unreadReminder,
     scope,
   };
 }

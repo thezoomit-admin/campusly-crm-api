@@ -40,6 +40,9 @@ notificationsRouter.get("/", requirePermission("notification:view"), async (req,
         search: queryString(req.query.search),
         from: queryString(req.query.from),
         to: queryString(req.query.to),
+        kind: queryString(req.query.kind),
+        category: queryString(req.query.category),
+        channel: queryString(req.query.channel),
       }),
     );
   } catch (error) {
