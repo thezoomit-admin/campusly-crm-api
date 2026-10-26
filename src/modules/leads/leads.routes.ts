@@ -46,7 +46,13 @@ import {
   uploadLeadDocument,
   verifyLeadDocument,
 } from "./leads.documents";
-import { createLeadNote, listLeadNotes } from "./leads.notes";
+import {
+  createLeadNote,
+  deleteLeadNote,
+  listLeadNotes,
+  setLeadNotePin,
+  updateLeadNote,
+} from "./leads.notes";
 import { handoverLead } from "./leads.handover";
 import { previewCountryAssignment } from "./leads.assignment";
 import { MAX_LEAD_UPLOAD_BYTES } from "./leads.storage";
@@ -333,6 +339,74 @@ leadsRouter.post(
         },
       );
       res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+leadsRouter.patch(
+  "/:id/notes/:noteId",
+  requirePermission("lead:edit"),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await updateLeadNote(
+          req.auth!,
+          routeParam(req.params.id),
+          routeParam(req.params.noteId),
+          body(req),
+          {
+            ipAddress: requestIp(req),
+            userAgent: requestUserAgent(req),
+          },
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+leadsRouter.post(
+  "/:id/notes/:noteId/pin",
+  requirePermission("lead:edit"),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await setLeadNotePin(
+          req.auth!,
+          routeParam(req.params.id),
+          routeParam(req.params.noteId),
+          body(req),
+          {
+            ipAddress: requestIp(req),
+            userAgent: requestUserAgent(req),
+          },
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+leadsRouter.delete(
+  "/:id/notes/:noteId",
+  requirePermission("lead:edit"),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await deleteLeadNote(
+          req.auth!,
+          routeParam(req.params.id),
+          routeParam(req.params.noteId),
+          {
+            ipAddress: requestIp(req),
+            userAgent: requestUserAgent(req),
+          },
+        ),
+      );
     } catch (error) {
       next(error);
     }

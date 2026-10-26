@@ -1020,15 +1020,19 @@ model Lead {
 }
 
 model LeadNote {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  leadId      String   @map("lead_id") @db.Uuid
-  body        String   @db.Text
-  createdById String?  @map("created_by_id") @db.Uuid
-  createdAt   DateTime @default(now()) @map("created_at")
-  lead        Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  createdBy   User?    @relation("LeadNoteAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  leadId      String    @map("lead_id") @db.Uuid
+  body        String    @db.Text
+  createdById String?   @map("created_by_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @map("updated_at")
+  pinnedAt    DateTime? @map("pinned_at")
+  deletedAt   DateTime? @map("deleted_at")
+  lead        Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  createdBy   User?     @relation("LeadNoteAuthor", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([leadId, createdAt])
+  @@index([leadId, deletedAt])
   @@index([createdById])
   @@map("lead_notes")
 }
