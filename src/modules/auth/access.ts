@@ -62,6 +62,15 @@ export function hasPermission(permissions: string[], required: string | string[]
   return needed.some((item) => permissions.includes(item))
 }
 
+const PERMISSION_GRANT_ROLE_KEYS = new Set(["admin", "ceo"])
+
+export function isPermissionGrantRole(roleKey?: string | null, roleKeys: string[] = []) {
+  return (
+    (roleKey != null && PERMISSION_GRANT_ROLE_KEYS.has(roleKey)) ||
+    roleKeys.some((key) => PERMISSION_GRANT_ROLE_KEYS.has(key))
+  )
+}
+
 /** CRM User account must be ACTIVE to receive leads. */
 export function canReceiveLeadAssignment(status: string) {
   return status === 'ACTIVE'

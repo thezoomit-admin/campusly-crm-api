@@ -2,7 +2,7 @@ import type { Prisma, RecordStatus } from "../../lib/prisma-client";
 import { writeAuditLog } from "../../lib/audit";
 import { httpError } from "../../lib/http-error";
 import { prisma } from "../../lib/prisma";
-import { isCriticalPermission, permissionLabel } from "../auth/access";
+import { isCriticalPermission, isPermissionGrantRole, permissionLabel } from "../auth/access";
 import { revokeUserSessions, type AuthContext } from "../auth/session.service";
 import { notifyCriticalPermissionChanges } from "../notifications/notifications.service";
 
@@ -289,6 +289,12 @@ export async function setRolePermissions(
   permissionIds: unknown,
   meta: { ipAddress?: string; userAgent?: string },
 ) {
+  if (!isPermissionGrantRole(auth.role.key, auth.roles)) {
+    throw httpError.accessDenied(
+      "Only Administrator and CEO can assign permissions.",
+    );
+  }
+
   if (!Array.isArray(permissionIds)) {
     throw httpError.badRequest("Invalid permission payload.");
   }

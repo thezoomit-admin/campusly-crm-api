@@ -38,6 +38,7 @@ import { permissionsRouter } from "./modules/permissions/permissions.routes";
 import { pipelineRouter } from "./modules/pipeline/pipeline.routes";
 import { rolesRouter } from "./modules/roles/roles.routes";
 import { searchRouter } from "./modules/search/search.routes";
+import { settingsRouter } from "./modules/settings/settings.routes";
 import { serviceItemsRouter } from "./modules/service-items/service-items.routes";
 import { usersRouter } from "./modules/users/users.routes";
 import { whatsappRouter } from "./modules/whatsapp/whatsapp.routes";
@@ -137,6 +138,7 @@ export function createApp() {
   app.use("/api/pipeline", pipelineRouter);
   app.use("/api/performance", performanceRouter);
   app.use("/api/search", searchRouter);
+  app.use("/api/settings", settingsRouter);
 
   app.use((req, res) => {
     res.status(404).json({ error: "Not found", path: req.path });

@@ -12,6 +12,7 @@ import {
 import {
   defaultScopesForRole,
   isCriticalPermission,
+  isPermissionGrantRole,
   permissionLabel,
   userDirectoryScope,
 } from "../auth/access";
@@ -863,6 +864,11 @@ export async function setUserOverrides(
   overrides: unknown,
   meta: { ipAddress?: string; userAgent?: string },
 ) {
+  if (!isPermissionGrantRole(auth.role.key, auth.roles)) {
+    throw httpError.accessDenied(
+      "Only Administrator and CEO can assign permissions.",
+    );
+  }
   if (auth.user.id === userId) {
     throw httpError.accessDenied();
   }
@@ -1009,6 +1015,11 @@ export async function setUserScopes(
   scopes: unknown,
   meta: { ipAddress?: string; userAgent?: string },
 ) {
+  if (!isPermissionGrantRole(auth.role.key, auth.roles)) {
+    throw httpError.accessDenied(
+      "Only Administrator and CEO can assign permissions.",
+    );
+  }
   if (!scopes || typeof scopes !== "object") {
     throw httpError.badRequest("Invalid data scope payload.");
   }

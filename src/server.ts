@@ -7,6 +7,10 @@ import { startEmailWaitingReplyJob } from "./jobs/email-waiting-reply";
 import { startFollowUpJobs } from "./jobs/follow-up-jobs";
 import { startOfferExpiryJob } from "./jobs/offer-expiry";
 import { ensureDbConnected, prisma } from "./lib/prisma";
+import {
+  ensureLeadPagePermissions,
+  ensurePermissionGrantAccess,
+} from "./modules/auth/ensure-lead-permissions";
 import { ensureLeadAttribution } from "./modules/leads/lead-attribution";
 import { ensurePerformanceSetup } from "./modules/performance/performance.service";
 import { syncStoredLeadScores } from "./modules/leads/leads.helpers";
@@ -92,6 +96,12 @@ async function bootstrap() {
   try {
     await ensureDbConnected();
     console.log("✅ Database connected successfully");
+    await ensureLeadPagePermissions().catch((error) => {
+      console.error("Lead page permission setup skipped:", error);
+    });
+    await ensurePermissionGrantAccess().catch((error) => {
+      console.error("Permission grant access setup skipped:", error);
+    });
     await ensureLeadAttribution().catch((error) => {
       console.error("Lead attribution setup skipped:", error);
     });

@@ -12,7 +12,7 @@ pipelineRouter.get('/dashboard', async (req, res, next) => {
     const now = new Date()
     const year = Number(req.query.year) || now.getUTCFullYear()
     const month = Number(req.query.month) || now.getUTCMonth() + 1
-    const data = await getDashboardOverview(year, month)
+    const data = await getDashboardOverview(req.auth!, year, month)
     res.json(data)
   } catch (error) {
     next(error)

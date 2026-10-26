@@ -3,6 +3,10 @@ import { httpError } from "../../lib/http-error";
 import { prisma } from "../../lib/prisma";
 import { canReceiveLeadAssignment, hasPermission } from "../auth/access";
 import type { AuthContext } from "../auth/session.service";
+import {
+  CLOSED_PIPELINE_STATUS_CODES,
+  CLOSED_PIPELINE_STATUS_NAMES,
+} from "./lead-status";
 
 export const BASIC_FIELDS = new Set([
   "name",
@@ -305,15 +309,39 @@ export function leadPoolScopeWhere(auth: AuthContext): Prisma.LeadWhereInput {
   return { id: { in: [] } };
 }
 
+function closedPipelineWhere(): Prisma.LeadWhereInput {
+  return {
+    OR: [
+      { statusCode: { in: [...CLOSED_PIPELINE_STATUS_CODES] } },
+      { status: { in: [...CLOSED_PIPELINE_STATUS_NAMES] } },
+    ],
+  };
+}
+
 export function leadReadableWhere(auth: AuthContext): Prisma.LeadWhereInput {
   const scope = leadScopeWhere(auth);
-  // ALL already covers owned + pool. Putting `{}` inside OR makes Prisma match
-  // nothing for that branch, so assigned leads would 404 on detail/view.
-  if (Object.keys(scope).length === 0) return {};
-  if (!hasPermission(auth.permissions, ["lead:assign", "lead:reassign"])) {
-    return scope;
+  const scopeIsAll = Object.keys(scope).length === 0;
+  const canView = hasPermission(auth.permissions, "lead:view");
+  const canPool = hasPermission(auth.permissions, ["lead:assign", "lead:reassign"]);
+  const canViewClosed = hasPermission(auth.permissions, "lead:view_closed");
+
+  // All Leads covers the caller's data scope, including closed leads in that scope.
+  // An empty scope object must not be placed inside OR — Prisma would match nothing.
+  if (canView) {
+    if (scopeIsAll) return {};
+    if (!canPool) return scope;
+    return { OR: [scope, leadPoolScopeWhere(auth)] };
   }
-  return { OR: [scope, leadPoolScopeWhere(auth)] };
+
+  // My Leads is available to every signed-in user: they can open leads they own.
+  const branches: Prisma.LeadWhereInput[] = [{ ownerId: auth.user.id }];
+  if (canPool) branches.push(leadPoolScopeWhere(auth));
+  if (canViewClosed) {
+    branches.push(
+      scopeIsAll ? closedPipelineWhere() : { AND: [scope, closedPipelineWhere()] },
+    );
+  }
+  return { OR: branches };
 }
 
 export function formatWaitingTime(createdAt: Date, now = new Date()) {

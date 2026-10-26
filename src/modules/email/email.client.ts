@@ -46,6 +46,16 @@ function messageId() {
 export async function sendMailboxEmail(input: OutboundEmail): Promise<string> {
   const fromAddress = mailboxAddress()
   const id = messageId()
+  let displayName = config.email.fromName
+  let replyTo: string | undefined
+  try {
+    const { readWorkspaceSettings } = await import('../settings/settings.service')
+    const workspace = await readWorkspaceSettings()
+    if (workspace.name) displayName = workspace.name
+    if (workspace.supportEmail) replyTo = workspace.supportEmail
+  } catch (error) {
+    console.error('[email] workspace settings unavailable', error)
+  }
 
   if (!isEmailConfigured()) {
     if (isEmailMockMode()) {
@@ -66,7 +76,8 @@ export async function sendMailboxEmail(input: OutboundEmail): Promise<string> {
 
   try {
     const info = await transport.sendMail({
-      from: config.email.fromName ? `"${config.email.fromName}" <${fromAddress}>` : fromAddress,
+      from: displayName ? `"${displayName.replace(/[\r\n"]/g, '').trim()}" <${fromAddress}>` : fromAddress,
+      replyTo,
       to: input.to,
       subject: input.subject,
       text: input.text,
