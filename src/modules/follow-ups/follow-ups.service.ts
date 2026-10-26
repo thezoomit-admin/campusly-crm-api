@@ -24,6 +24,11 @@ import { deactivateFollowUpNotifications } from "../notifications/notifications.
 
 export type AuditMeta = { ipAddress?: string; userAgent?: string };
 
+const followUpReadInclude = {
+  lead: { select: { id: true, code: true, name: true } },
+  owner: { select: { photoUrl: true } },
+} satisfies Prisma.FollowUpInclude;
+
 function parseDueAt(value: unknown): Date | null {
   const text = asString(value);
   if (!text) return null;
@@ -151,6 +156,7 @@ export function serializeFollowUp(row: {
   createdAt: Date;
   updatedAt: Date;
   lead?: { id: string; code: string; name: string } | null;
+  owner?: { photoUrl: string | null } | null;
 }) {
   return {
     id: row.id,
@@ -164,6 +170,7 @@ export function serializeFollowUp(row: {
     owner: row.ownerName || "—",
     ownerName: row.ownerName,
     ownerId: row.ownerId,
+    ownerPhotoUrl: row.owner?.photoUrl || null,
     due: formatDueLabel(row.dueAt),
     dueAt: row.dueAt ? row.dueAt.toISOString() : null,
     priority: row.priority || "Medium",
@@ -205,7 +212,7 @@ async function markOverdueForWhere(where: Prisma.FollowUpWhereInput) {
 async function assertCanAccessFollowUp(auth: AuthContext, id: string) {
   const followUp = await prisma.followUp.findUnique({
     where: { id },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
   });
   if (!followUp) throw httpError.notFound("Follow-up not found.");
   if (followUp.leadId) {
@@ -288,7 +295,7 @@ export async function listFollowUps(
 
   const rows = await prisma.followUp.findMany({
     where,
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
     orderBy: [{ dueAt: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
   });
 
@@ -314,7 +321,6 @@ export async function listFollowUps(
         .toLowerCase()
         .includes(search);
     })
-    // Open lead pipeline follow-ups first (matches Leads "Follow-up" column), then history.
     .sort((a, b) => {
       const aOpen = openStatuses.has(a.status) ? 0 : 1;
       const bOpen = openStatuses.has(b.status) ? 0 : 1;
@@ -333,7 +339,7 @@ export async function listLeadFollowUps(auth: AuthContext, leadId: string) {
   await markOverdueForWhere({ leadId });
   const rows = await prisma.followUp.findMany({
     where: { leadId },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
     orderBy: [
       { dueAt: { sort: "desc", nulls: "last" } },
       { createdAt: "desc" },
@@ -434,7 +440,7 @@ export async function scheduleLeadFollowUp(
       source: asOptionalString(input.source, 40) || "Manual",
       sourceReason,
     },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
   });
 
   // Close prior open follow-ups in the same lane so getLead's nextFollowUp
@@ -640,7 +646,7 @@ export async function completeFollowUp(
       completedById: auth.user.id,
       completedByName: auth.user.fullName,
     },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
   });
   await deactivateFollowUpNotifications(current.id);
 
@@ -699,7 +705,7 @@ export async function completeFollowUp(
         source: "Manual",
         sourceReason: "Created on completion",
       },
-      include: { lead: { select: { id: true, code: true, name: true } } },
+      include: followUpReadInclude,
     });
     nextFollowUp = serializeFollowUp(created);
     await createScheduledActivity(auth, {
@@ -784,7 +790,7 @@ export async function rescheduleFollowUp(
         historyEntry,
       ] as Prisma.InputJsonValue,
     },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
   });
   await deactivateFollowUpNotifications(current.id);
 
@@ -819,7 +825,7 @@ export async function rescheduleFollowUp(
         historyEntry,
       ] as Prisma.InputJsonValue,
     },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
   });
 
   await createScheduledActivity(auth, {
@@ -896,7 +902,7 @@ export async function cancelFollowUp(
       cancelledById: auth.user.id,
       cancelledByName: auth.user.fullName,
     },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
   });
   await deactivateFollowUpNotifications(current.id);
 
@@ -980,7 +986,7 @@ export async function updateFollowUpReminder(
       reminderAt,
       reminderStatus: reminderAt ? "Pending" : "Skipped",
     },
-    include: { lead: { select: { id: true, code: true, name: true } } },
+    include: followUpReadInclude,
   });
   return { followUp: serializeFollowUp(updated) };
 }
