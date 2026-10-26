@@ -17,6 +17,7 @@ import {
   recordCampaignTouch,
 } from "./lead-attribution";
 import { nextLeadCode } from "./lead-code";
+import { formatWorkspaceDateTime, readWorkspaceSettings } from "../settings/settings.service";
 import { resolveCountryAssignment } from "./leads.assignment";
 import { ensureLegacyNoteSeed, recordLeadNoteChange } from "./leads.notes";
 import {
@@ -443,6 +444,10 @@ export async function checkDuplicate(
   const phone = asString(input.phone);
   if (!phone || !isValidMobile(phone)) {
     throw httpError.validation({ phone: "Please enter a valid phone number." });
+  }
+  const settings = await readWorkspaceSettings();
+  if (!settings.duplicateCheckEnabled) {
+    return { duplicate: false as const, checkEnabled: false as const };
   }
   const existing = await findDuplicate(normalizePhone(phone));
   if (!existing) {
@@ -1407,7 +1412,10 @@ export async function createLead(
   await ensureLeadAttribution();
   const parsed = await parseLeadInput(body, "create");
   await assertExternalLeadAvailable(parsed.externalLeadId);
-  const duplicate = await findDuplicate(parsed.phoneNormalized);
+  const settings = await readWorkspaceSettings();
+  const duplicate = settings.duplicateCheckEnabled
+    ? await findDuplicate(parsed.phoneNormalized)
+    : null;
   let createAsDuplicateOf: string | null = null;
   if (duplicate) {
     const createAnyway =
@@ -1580,7 +1588,10 @@ export async function updateLead(
     parsed.phoneNormalized &&
     parsed.phoneNormalized !== current.phoneNormalized
   ) {
-    const duplicate = await findDuplicate(parsed.phoneNormalized, id);
+    const settings = await readWorkspaceSettings();
+    const duplicate = settings.duplicateCheckEnabled
+      ? await findDuplicate(parsed.phoneNormalized, id)
+      : null;
     if (duplicate) throw httpError.duplicateLead(duplicate);
   }
 
@@ -2765,12 +2776,6 @@ export async function listMyLeads(
     order?: string;
   },
 ) {
-  if (!hasPermission(auth.permissions, "lead:view")) {
-    throw httpError.accessDenied(
-      "You do not have permission to access this page.",
-    );
-  }
-
   const search = query.search?.trim();
   const page = Math.max(1, query.page || 1);
   const limit = Math.min(50, Math.max(10, query.limit || 10));
@@ -3303,7 +3308,7 @@ export async function assignLead(
     // Reassignment must not spawn extra note/follow-up activity noise.
     try {
       if (isUnassigned) {
-        const { createSystemFollowUp, daysFromNow } =
+        const { createSystemFollowUp, defaultFirstContactDueAt } =
           await import("../follow-ups/system-follow-up");
         await createSystemFollowUp({
           leadId: lead.id,
@@ -3311,7 +3316,7 @@ export async function assignLead(
           type: "Call",
           purpose: "Initial Contact",
           nextAction: "Make first contact call",
-          dueAt: daysFromNow(1),
+          dueAt: await defaultFirstContactDueAt(),
           priority: lead.priority || "Medium",
           ownerId: assignee.id,
           ownerName: assignee.fullName,
@@ -3323,14 +3328,7 @@ export async function assignLead(
         });
       }
       const { dispatchCrmEvent } = await import("../notifications/notifications.service");
-      const when = new Date().toLocaleString("en-US", {
-        timeZone: "Asia/Dhaka",
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-      });
+      const when = await formatWorkspaceDateTime(new Date());
       await dispatchCrmEvent({
         eventType: isUnassigned ? "lead_assigned" : "lead_reassigned",
         dedupeKey: `lead-assigned:${assignmentId}`,

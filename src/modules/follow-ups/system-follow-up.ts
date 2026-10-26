@@ -99,6 +99,13 @@ export async function createSystemFollowUp(input: SystemFollowUpInput) {
   return { followUp, created: true }
 }
 
+export async function defaultFirstContactDueAt() {
+  const { readWorkspaceSettings } = await import('../settings/settings.service')
+  const settings = await readWorkspaceSettings()
+  const days = Number.isInteger(settings.defaultFollowUpDays) ? settings.defaultFollowUpDays : 1
+  return daysFromNow(Math.min(30, Math.max(1, days)))
+}
+
 export function daysFromNow(days: number, from = new Date()) {
   const date = new Date(from)
   date.setDate(date.getDate() + days)

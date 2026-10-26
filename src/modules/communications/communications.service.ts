@@ -17,7 +17,7 @@ import {
   resolveIncomingAttribution,
 } from '../leads/lead-attribution'
 import { resolveCountryAssignment } from '../leads/leads.assignment'
-import { createSystemFollowUp, daysFromNow } from '../follow-ups/system-follow-up'
+import { createSystemFollowUp, defaultFirstContactDueAt } from '../follow-ups/system-follow-up'
 import { websiteFormLabel } from '../integrations/website-forms'
 import {
   asOptionalString,
@@ -650,7 +650,7 @@ async function processEvent(eventId: string) {
             type: 'Call',
             purpose: 'Initial Contact',
             nextAction: 'Make first contact call',
-            dueAt: daysFromNow(1),
+            dueAt: await defaultFirstContactDueAt(),
             priority: 'Medium',
             ownerId,
             ownerName: created.ownerName,

@@ -3,13 +3,19 @@ export const PERMISSION_CATALOG = [
     module: "Lead Management",
     resource: "lead",
     action: "view",
-    description: "View leads",
+    description: "All Leads",
+  },
+  {
+    module: "Lead Management",
+    resource: "lead",
+    action: "view_closed",
+    description: "Close Lost Lead",
   },
   {
     module: "Lead Management",
     resource: "lead",
     action: "create",
-    description: "Create leads",
+    description: "Create Lead",
   },
   {
     module: "Lead Management",
@@ -27,7 +33,7 @@ export const PERMISSION_CATALOG = [
     module: "Lead Management",
     resource: "lead",
     action: "assign",
-    description: "Assign leads",
+    description: "Lead Pool",
   },
   {
     module: "Lead Management",
@@ -577,6 +583,7 @@ export const ROLE_DEFAULTS: Record<
     description: "Organization-level business visibility",
     permissions: [
       "lead:view",
+      "lead:view_closed",
       "lead:export",
       "follow_up:view",
       "activity:view",
@@ -604,7 +611,10 @@ export const ROLE_DEFAULTS: Record<
       "campaign:view",
       "user:view",
       "role:view",
+      "role:edit",
+      "role:delete",
       "permission:view",
+      "permission:configure",
       "master_data:view",
       "settings:view",
       "country_assignment:view",
@@ -617,6 +627,7 @@ export const ROLE_DEFAULTS: Record<
     description: "Team-scoped lead and employee management",
     permissions: [
       "lead:view",
+      "lead:view_closed",
       "lead:create",
       "lead:edit",
       "lead:assign",
@@ -684,6 +695,7 @@ export const ROLE_DEFAULTS: Record<
     description: "Assigned-lead and counselling access",
     permissions: [
       "lead:view",
+      "lead:view_closed",
       "lead:create",
       "lead:edit",
       "lead:convert",
@@ -723,6 +735,7 @@ export const ROLE_DEFAULTS: Record<
     description: "Campaign lead visibility and marketing performance",
     permissions: [
       "lead:view",
+      "lead:view_closed",
       "follow_up:view",
       "activity:view",
       "report:view",
@@ -737,6 +750,7 @@ export const ROLE_DEFAULTS: Record<
     description: "Lead handling, calling, and follow-up access",
     permissions: [
       "lead:view",
+      "lead:view_closed",
       "lead:create",
       "lead:edit",
       "lead:qualify",

@@ -9,6 +9,7 @@ import { writeAuditLog } from "../../lib/audit";
 import { hasPermission } from "../auth/access";
 import type { AuthContext } from "../auth/session.service";
 import { assertCanViewLead } from "../leads/leads.helpers";
+import { formatDateOnly, readWorkspaceSettings } from "../settings/settings.service";
 import {
   createSystemFollowUp,
   daysFromNow,
@@ -58,15 +59,6 @@ function parseDateOnly(value: unknown): Date | null {
     Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
   );
   return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function formatDisplayDate(date: Date) {
-  return date.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
 }
 
 async function nextDocumentNumber(
@@ -495,10 +487,11 @@ async function buildReceiptSnapshot(
   payment: NonNullable<Awaited<ReturnType<typeof loadPayment>>>,
   receiptNumber: string,
 ) {
+  const settings = await readWorkspaceSettings();
   return {
-    consultancyName: CONSULTANCY_NAME,
+    consultancyName: settings.name || CONSULTANCY_NAME,
     receiptNumber,
-    paymentDate: formatDisplayDate(payment.paymentDate),
+    paymentDate: formatDateOnly(payment.paymentDate, settings.dateFormat),
     studentName: payment.lead.name,
     leadCode: payment.lead.code,
     paymentFor:
@@ -720,6 +713,8 @@ export async function createOfferPayment(
     }
   }
 
+  const workspace = await readWorkspaceSettings();
+
   try {
     const createdId = await prisma.$transaction(async (tx) => {
       await lockLead(tx, leadId);
@@ -781,6 +776,7 @@ export async function createOfferPayment(
           leadId,
           serviceOfferId: offerId,
           amount: money(amount),
+          currency: workspace.currency,
           methodCode: method!.code,
           methodName: method!.name,
           transactionRef: transactionRef || null,
@@ -820,26 +816,7 @@ export async function createOfferPayment(
           include: paymentInclude,
         });
         if (loaded) {
-          const snapshot = {
-            consultancyName: CONSULTANCY_NAME,
-            receiptNumber,
-            paymentDate: formatDisplayDate(loaded.paymentDate),
-            studentName: loaded.lead.name,
-            leadCode: loaded.lead.code,
-            paymentFor:
-              loaded.serviceOffer.packageName ||
-              `Service Offer V${loaded.serviceOffer.offerVersion}`,
-            paymentAmount: money(loaded.amount),
-            paymentMethod: loaded.methodName,
-            transactionRef: loaded.transactionRef,
-            totalPayable: money(loaded.serviceOffer.finalPayable),
-            previouslyPaid: money(loaded.previousPaidAmount),
-            thisPayment: money(loaded.amount),
-            remainingDue: money(loaded.remainingDueAmount),
-            receivedBy: loaded.receivedBy.fullName,
-            paymentNumber: loaded.paymentNumber,
-            currency: loaded.currency,
-          };
+          const snapshot = await buildReceiptSnapshot(loaded, receiptNumber);
           await tx.receipt.create({
             data: {
               receiptNumber,
@@ -1381,7 +1358,7 @@ export async function listLeadPaymentHistory(
       finalPayable: money(finalPayable),
       paidAmount: money(paidAmount),
       dueAmount: money(dueAmount),
-      currency: "BDT" as const,
+      currency: (await readWorkspaceSettings()).currency,
       paymentStatus: offerPaymentStatus,
       activeOffer: active
         ? {
@@ -1584,7 +1561,7 @@ export async function paymentCollectionSummary(auth: AuthContext) {
     partialPayments: partialOffers,
     completedPayments: completedCount,
     pendingTransactions: pendingTxnCount,
-    currency: "BDT" as const,
+    currency: (await readWorkspaceSettings()).currency,
     byEmployee: byEmployee
       .map((row) => ({
         userId: row.receivedById,

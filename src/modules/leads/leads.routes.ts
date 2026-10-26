@@ -4,6 +4,7 @@ import { httpError } from "../../lib/http-error";
 import { writeAuditLog } from "../../lib/audit";
 import { requestIp, requestUserAgent, routeParam } from "../../lib/request";
 import { respondWithExport } from "../../lib/xlsx-export";
+import { hasPermission } from "../auth/access";
 import {
   requireAuth,
   requirePermission,
@@ -92,8 +93,24 @@ leadsRouter.post(
   },
 );
 
-leadsRouter.get("/", requirePermission("lead:view"), async (req, res, next) => {
+leadsRouter.get("/", requireAuth, async (req, res, next) => {
   try {
+    const status = queryString(req.query.status)?.toLowerCase();
+    const closedList = status === "closed";
+    const allowed = hasPermission(
+      req.auth!.permissions,
+      closedList ? "lead:view_closed" : "lead:view",
+    );
+    if (!allowed) {
+      next(
+        httpError.accessDenied(
+          closedList
+            ? "You do not have permission to access Lost/Close Leads."
+            : "You do not have permission to access All Leads.",
+        ),
+      );
+      return;
+    }
     res.json(
       await listLeads(req.auth!, {
         search: queryString(req.query.search),
@@ -133,10 +150,7 @@ leadsRouter.post(
 
 leadsRouter.get(
   "/mine",
-  requirePermission(
-    "lead:view",
-    "You do not have permission to access this page.",
-  ),
+  requireAuth,
   async (req, res, next) => {
     try {
       res.json(
@@ -256,7 +270,7 @@ leadsRouter.get(
 
 leadsRouter.get(
   "/:id",
-  requirePermission("lead:view"),
+  requireAuth,
   async (req, res, next) => {
     try {
       res.json(await getLead(req.auth!, routeParam(req.params.id)));
@@ -268,7 +282,7 @@ leadsRouter.get(
 
 leadsRouter.get(
   "/:id/status-history",
-  requirePermission("lead:view"),
+  requireAuth,
   async (req, res, next) => {
     try {
       res.json(
@@ -282,7 +296,7 @@ leadsRouter.get(
 
 leadsRouter.get(
   "/:id/assignments",
-  requirePermission("lead:view"),
+  requireAuth,
   async (req, res, next) => {
     try {
       res.json(await listLeadAssignments(req.auth!, routeParam(req.params.id)));
@@ -294,7 +308,7 @@ leadsRouter.get(
 
 leadsRouter.get(
   "/:id/notes",
-  requirePermission("lead:view"),
+  requireAuth,
   async (req, res, next) => {
     try {
       res.json(await listLeadNotes(req.auth!, routeParam(req.params.id)));
@@ -648,7 +662,7 @@ leadsRouter.post(
 
 leadsRouter.get(
   "/:id/attribution-changes",
-  requirePermission("lead:view"),
+  requireAuth,
   async (req, res, next) => {
     try {
       res.json(

@@ -211,6 +211,7 @@ model User {
   verifiedFileDocumentVersions  FileDocumentVersion[]       @relation("FileDocumentVersionVerifier")
   fileDocumentRequests          FileDocumentRequest[]       @relation("FileDocumentRequester")
   fileDocumentActivities        FileDocumentActivity[]      @relation("FileDocumentActivityActor")
+  preference                    UserPreference?
 
   @@index([primaryRoleId])
   @@index([departmentId])
@@ -2137,6 +2138,32 @@ model PerformanceSetting {
   updatedById         String?  @map("updated_by_id") @db.Uuid
 
   @@map("performance_settings")
+}
+
+model WorkspaceSetting {
+  id                     String   @id @default("default")
+  name                   String   @default("EduConsult CRM")
+  supportEmail           String   @default("support@campusly.com") @map("support_email")
+  timezone               String   @default("Asia/Dhaka")
+  currency               String   @default("BDT")
+  dateFormat             String   @default("DD MMM YYYY") @map("date_format")
+  defaultFollowUpDays    Int      @default(1) @map("default_follow_up_days")
+  leadCodePrefix         String   @default("L") @map("lead_code_prefix")
+  duplicateCheckEnabled  Boolean  @default(true) @map("duplicate_check_enabled")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+  updatedById            String?  @map("updated_by_id") @db.Uuid
+
+  @@map("workspace_settings")
+}
+
+model UserPreference {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  compactTables Boolean  @default(false) @map("compact_tables")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
 }
 
 model FileDocumentActivity {

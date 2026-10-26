@@ -1,5 +1,7 @@
+import type { Prisma } from "../../lib/prisma-client";
 import { prisma } from "../../lib/prisma";
 import { syncOverdueFollowUps } from "../../jobs/overdue-follow-ups";
+import type { AuthContext } from "../auth/session.service";
 import { ratePercent } from "../follow-ups/follow-ups.utils";
 
 const SOURCE_COLORS = [
@@ -112,8 +114,71 @@ function utcDayKey(date: Date) {
   return date.toISOString().slice(0, 10);
 }
 
-export async function getDashboardOverview(year: number, month: number) {
+/** CEO sees company-wide dashboard figures. Every other role sees only their own records. */
+function dashboardOwnerId(auth: AuthContext) {
+  return auth.role.key === "ceo" ? null : auth.user.id;
+}
+
+function leadWhere(
+  ownerId: string | null,
+  where: Prisma.LeadWhereInput = {},
+): Prisma.LeadWhereInput {
+  if (!ownerId) return where;
+  if (Object.keys(where).length === 0) return { ownerId };
+  return { AND: [{ ownerId }, where] };
+}
+
+function followUpWhere(
+  ownerId: string | null,
+  where: Prisma.FollowUpWhereInput = {},
+): Prisma.FollowUpWhereInput {
+  if (!ownerId) return where;
+  if (Object.keys(where).length === 0) return { ownerId };
+  return { AND: [{ ownerId }, where] };
+}
+
+function applicationWhere(
+  ownerId: string | null,
+  where: Prisma.ApplicationWhereInput = {},
+): Prisma.ApplicationWhereInput {
+  if (!ownerId) return where;
+  if (Object.keys(where).length === 0) return { lead: { ownerId } };
+  return { AND: [{ lead: { ownerId } }, where] };
+}
+
+function studentWhere(
+  ownerId: string | null,
+  where: Prisma.StudentWhereInput = {},
+): Prisma.StudentWhereInput {
+  if (!ownerId) return where;
+  if (Object.keys(where).length === 0) return { lead: { ownerId } };
+  return { AND: [{ lead: { ownerId } }, where] };
+}
+
+function paymentWhere(
+  ownerId: string | null,
+  where: Prisma.PaymentWhereInput = {},
+): Prisma.PaymentWhereInput {
+  if (!ownerId) return where;
+  if (Object.keys(where).length === 0) return { lead: { ownerId } };
+  return { AND: [{ lead: { ownerId } }, where] };
+}
+
+function activityWhere(
+  ownerId: string | null,
+  where: Prisma.ActivityWhereInput,
+): Prisma.ActivityWhereInput {
+  if (!ownerId) return where;
+  return { AND: [{ userId: ownerId }, where] };
+}
+
+export async function getDashboardOverview(
+  auth: AuthContext,
+  year: number,
+  month: number,
+) {
   await syncOverdueFollowUps();
+  const ownerId = dashboardOwnerId(auth);
   const now = new Date();
   const last30 = addUtcDays(startOfUtcDay(now), -30);
   const prev30 = addUtcDays(last30, -30);
@@ -152,32 +217,44 @@ export async function getDashboardOverview(year: number, month: number) {
     monthPayments,
     monthMeetings,
   ] = await Promise.all([
-    prisma.lead.count(),
-    prisma.lead.count({ where: { createdAt: { gte: last30 } } }),
-    prisma.lead.count({ where: { createdAt: { gte: prev30, lt: last30 } } }),
-    prisma.application.count({
-      where: { status: { notIn: CLOSED_APPLICATION_STATUSES } },
+    prisma.lead.count({ where: leadWhere(ownerId) }),
+    prisma.lead.count({
+      where: leadWhere(ownerId, { createdAt: { gte: last30 } }),
+    }),
+    prisma.lead.count({
+      where: leadWhere(ownerId, { createdAt: { gte: prev30, lt: last30 } }),
     }),
     prisma.application.count({
-      where: {
+      where: applicationWhere(ownerId, {
+        status: { notIn: CLOSED_APPLICATION_STATUSES },
+      }),
+    }),
+    prisma.application.count({
+      where: applicationWhere(ownerId, {
         createdAt: { gte: last30 },
         status: { notIn: CLOSED_APPLICATION_STATUSES },
-      },
+      }),
     }),
     prisma.application.count({
-      where: {
+      where: applicationWhere(ownerId, {
         createdAt: { gte: prev30, lt: last30 },
         status: { notIn: CLOSED_APPLICATION_STATUSES },
-      },
+      }),
     }),
-    prisma.student.count(),
-    prisma.student.count({ where: { createdAt: { gte: last30 } } }),
-    prisma.student.count({ where: { createdAt: { gte: prev30, lt: last30 } } }),
-    prisma.followUp.count({
-      where: { status: { in: OPEN_FOLLOW_UP_STATUSES } },
+    prisma.student.count({ where: studentWhere(ownerId) }),
+    prisma.student.count({
+      where: studentWhere(ownerId, { createdAt: { gte: last30 } }),
+    }),
+    prisma.student.count({
+      where: studentWhere(ownerId, { createdAt: { gte: prev30, lt: last30 } }),
     }),
     prisma.followUp.count({
-      where: {
+      where: followUpWhere(ownerId, {
+        status: { in: OPEN_FOLLOW_UP_STATUSES },
+      }),
+    }),
+    prisma.followUp.count({
+      where: followUpWhere(ownerId, {
         OR: [
           { status: "Overdue" },
           {
@@ -187,84 +264,88 @@ export async function getDashboardOverview(year: number, month: number) {
             ],
           },
         ],
-      },
+      }),
     }),
     prisma.followUp.count({
-      where: {
+      where: followUpWhere(ownerId, {
         status: { in: OPEN_FOLLOW_UP_STATUSES },
         dueAt: {
           gte: startOfUtcDay(now),
           lt: addUtcDays(startOfUtcDay(now), 1),
         },
-      },
+      }),
     }),
     prisma.followUp.count({
-      where: {
+      where: followUpWhere(ownerId, {
         status: { in: ["Completed", "Done"] },
         completedAt: {
           gte: startOfUtcDay(now),
           lt: addUtcDays(startOfUtcDay(now), 1),
         },
-      },
+      }),
     }),
     prisma.followUp.count({
-      where: {
+      where: followUpWhere(ownerId, {
         dueAt: { gte: last30, lt: addUtcDays(startOfUtcDay(now), 1) },
         status: { notIn: ["Cancelled", "Rescheduled"] },
-      },
+      }),
     }),
     prisma.followUp.count({
-      where: {
+      where: followUpWhere(ownerId, {
         dueAt: { gte: last30, lt: addUtcDays(startOfUtcDay(now), 1) },
         status: { in: ["Completed", "Done"] },
-      },
+      }),
     }),
     prisma.followUp.findMany({
-      where: {
+      where: followUpWhere(ownerId, {
         dueAt: { gte: last30, lt: addUtcDays(startOfUtcDay(now), 1) },
         status: { in: ["Completed", "Done"] },
         completedAt: { not: null },
-      },
+      }),
       select: { dueAt: true, completedAt: true },
     }),
     prisma.followUp.count({
-      where: {
+      where: followUpWhere(ownerId, {
         createdAt: { gte: last30 },
         status: { in: OPEN_FOLLOW_UP_STATUSES },
-      },
+      }),
     }),
     prisma.followUp.count({
-      where: {
+      where: followUpWhere(ownerId, {
         createdAt: { gte: prev30, lt: last30 },
         status: { in: OPEN_FOLLOW_UP_STATUSES },
-      },
+      }),
     }),
     prisma.payment.findMany({
-      where: { status: { in: [...PAID_STATUSES] } },
+      where: paymentWhere(ownerId, { status: { in: [...PAID_STATUSES] } }),
       select: { amount: true },
     }),
     prisma.payment.findMany({
-      where: { status: { in: [...PAID_STATUSES] }, paymentDate: { gte: last30 } },
+      where: paymentWhere(ownerId, {
+        status: { in: [...PAID_STATUSES] },
+        paymentDate: { gte: last30 },
+      }),
       select: { amount: true },
     }),
     prisma.payment.findMany({
-      where: {
+      where: paymentWhere(ownerId, {
         status: { in: [...PAID_STATUSES] },
         paymentDate: { gte: prev30, lt: last30 },
-      },
+      }),
       select: { amount: true },
     }),
     prisma.lead.groupBy({
       by: ["source"],
-      where: { createdAt: { gte: last30 } },
+      where: leadWhere(ownerId, { createdAt: { gte: last30 } }),
       _count: { _all: true },
       orderBy: { _count: { source: "desc" } },
     }),
     prisma.lead.findMany({
-      where: { createdAt: { gte: last7 } },
+      where: leadWhere(ownerId, { createdAt: { gte: last7 } }),
       select: { createdAt: true },
     }),
     prisma.lead.findMany({
+      where: leadWhere(ownerId),
       orderBy: { createdAt: "desc" },
       take: 6,
       select: {
@@ -279,24 +360,35 @@ export async function getDashboardOverview(year: number, month: number) {
       },
     }),
     prisma.followUp.findMany({
-      where: { status: { in: OPEN_FOLLOW_UP_STATUSES } },
+      where: followUpWhere(ownerId, {
+        status: { in: OPEN_FOLLOW_UP_STATUSES },
+      }),
       orderBy: { dueAt: "asc" },
       take: 6,
     }),
     prisma.followUp.findMany({
-      where: { dueAt: { gte: monthStart, lt: monthEnd } },
+      where: followUpWhere(ownerId, {
+        dueAt: { gte: monthStart, lt: monthEnd },
+      }),
       select: { dueAt: true },
     }),
     prisma.application.findMany({
-      where: { submittedAt: { gte: monthStart, lt: monthEnd } },
+      where: applicationWhere(ownerId, {
+        submittedAt: { gte: monthStart, lt: monthEnd },
+      }),
       select: { submittedAt: true },
     }),
     prisma.payment.findMany({
-      where: { paymentDate: { gte: monthStart, lt: monthEnd } },
+      where: paymentWhere(ownerId, {
+        paymentDate: { gte: monthStart, lt: monthEnd },
+      }),
       select: { paymentDate: true },
     }),
     prisma.activity.findMany({
-      where: { type: "MEETING", occurredAt: { gte: monthStart, lt: monthEnd } },
+      where: activityWhere(ownerId, {
+        type: "MEETING",
+        occurredAt: { gte: monthStart, lt: monthEnd },
+      }),
       select: { occurredAt: true },
     }),
   ]);
