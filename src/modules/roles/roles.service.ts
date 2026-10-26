@@ -337,56 +337,64 @@ export async function setRolePermissions(
     ]),
   );
   const nextIds = new Set(permissions.map((item) => item.id));
+  const granted = permissions.filter((permission) => !previous.has(permission.id));
+  const revoked = [...previous.entries()].filter(
+    ([permissionId]) => !nextIds.has(permissionId),
+  );
   const criticalChanges: Array<{ label: string; from: string; to: string }> =
     [];
 
+  for (const permission of granted) {
+    if (isCriticalPermission(permission.resource, permission.action)) {
+      criticalChanges.push({
+        label: permissionLabel(permission.resource, permission.action),
+        from: "Denied",
+        to: "Allowed",
+      });
+    }
+  }
+  for (const [, key] of revoked) {
+    const [resource, action] = key.split(":");
+    if (resource && action && isCriticalPermission(resource, action)) {
+      criticalChanges.push({
+        label: permissionLabel(resource, action),
+        from: "Allowed",
+        to: "Denied",
+      });
+    }
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.rolePermission.deleteMany({ where: { roleId: id } });
-    await tx.rolePermission.createMany({
-      data: permissions.map((item) => ({ roleId: id, permissionId: item.id })),
-    });
-
-    for (const permission of permissions) {
-      if (!previous.has(permission.id)) {
-        await tx.permissionHistory.create({
-          data: {
-            roleId: id,
-            permissionId: permission.id,
-            previousEffect: "DENIED",
-            newEffect: "ALLOWED",
-            changedById: auth.user.id,
-          },
-        });
-        if (isCriticalPermission(permission.resource, permission.action)) {
-          criticalChanges.push({
-            label: permissionLabel(permission.resource, permission.action),
-            from: "Denied",
-            to: "Allowed",
-          });
-        }
-      }
+    if (permissions.length > 0) {
+      await tx.rolePermission.createMany({
+        data: permissions.map((item) => ({
+          roleId: id,
+          permissionId: item.id,
+        })),
+      });
     }
-
-    for (const [permissionId, key] of previous) {
-      if (!nextIds.has(permissionId)) {
-        await tx.permissionHistory.create({
-          data: {
-            roleId: id,
-            permissionId,
-            previousEffect: "ALLOWED",
-            newEffect: "DENIED",
-            changedById: auth.user.id,
-          },
-        });
-        const [resource, action] = key.split(":");
-        if (resource && action && isCriticalPermission(resource, action)) {
-          criticalChanges.push({
-            label: permissionLabel(resource, action),
-            from: "Allowed",
-            to: "Denied",
-          });
-        }
-      }
+    if (granted.length > 0) {
+      await tx.permissionHistory.createMany({
+        data: granted.map((permission) => ({
+          roleId: id,
+          permissionId: permission.id,
+          previousEffect: "DENIED",
+          newEffect: "ALLOWED",
+          changedById: auth.user.id,
+        })),
+      });
+    }
+    if (revoked.length > 0) {
+      await tx.permissionHistory.createMany({
+        data: revoked.map(([permissionId]) => ({
+          roleId: id,
+          permissionId,
+          previousEffect: "ALLOWED",
+          newEffect: "DENIED",
+          changedById: auth.user.id,
+        })),
+      });
     }
   });
 
