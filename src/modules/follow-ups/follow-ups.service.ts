@@ -388,6 +388,29 @@ export async function scheduleLeadFollowUp(
   const reminderAt = reminderInstant(input.dueAt, reminder);
   const dueAt = input.dueAt;
 
+  // Replacing an open item in the same lane is a reschedule, even when the
+  // caller already described it that way. Meetings stay separate from other types.
+  const priorOpen = await prisma.followUp.findMany({
+    where: {
+      leadId: input.leadId,
+      status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
+      ...(type === "Meeting"
+        ? { type: "Meeting" }
+        : { type: { not: "Meeting" } }),
+    },
+    select: { id: true },
+  });
+  const callerMarkedReschedule = /reschedul/i.test(input.sourceReason || "");
+  const isReschedule = priorOpen.length > 0 || callerMarkedReschedule;
+  const providedReason = asOptionalString(input.sourceReason, 170);
+  const sourceReason = isReschedule
+    ? providedReason && /reschedul/i.test(providedReason)
+      ? providedReason
+      : providedReason
+        ? `Rescheduled: ${providedReason}`
+        : `Rescheduled from previous ${type}`
+    : asOptionalString(input.sourceReason, 200);
+
   const followUp = await prisma.followUp.create({
     data: {
       leadId: input.leadId,
@@ -409,29 +432,19 @@ export async function scheduleLeadFollowUp(
       ownerId: input.ownerId || auth.user.id,
       ownerName: input.ownerName || auth.user.fullName,
       source: asOptionalString(input.source, 40) || "Manual",
-      sourceReason: asOptionalString(input.sourceReason, 200),
+      sourceReason,
     },
     include: { lead: { select: { id: true, code: true, name: true } } },
   });
 
   // Close prior open follow-ups in the same lane so getLead's nextFollowUp
   // (earliest open dueAt) reflects this new schedule in the countdown UI.
-  // Meetings and non-meetings stay independent.
-  const superseded = await prisma.followUp.findMany({
-    where: {
-      leadId: input.leadId,
-      id: { not: followUp.id },
-      status: { notIn: [...FOLLOW_UP_CLOSED_STATUSES] },
-      ...(type === "Meeting"
-        ? { type: "Meeting" }
-        : { type: { not: "Meeting" } }),
-    },
-    select: { id: true },
-  });
-  if (superseded.length > 0) {
-    const reason = `Superseded by new ${type} follow-up`;
+  if (priorOpen.length > 0) {
+    const reason =
+      asOptionalString(input.sourceReason, 1000) ||
+      `Superseded by new ${type} follow-up`;
     await prisma.followUp.updateMany({
-      where: { id: { in: superseded.map((item) => item.id) } },
+      where: { id: { in: priorOpen.map((item) => item.id) } },
       data: {
         status: "Cancelled",
         cancelReason: reason,
@@ -441,7 +454,7 @@ export async function scheduleLeadFollowUp(
       },
     });
     await Promise.all(
-      superseded.map((item) => deactivateFollowUpNotifications(item.id)),
+      priorOpen.map((item) => deactivateFollowUpNotifications(item.id)),
     );
   }
 
@@ -451,17 +464,20 @@ export async function scheduleLeadFollowUp(
       leadName: input.leadName,
       type,
       dueAt,
-      notes: `Follow-up scheduled (${type}) — ${nextAction}`,
+      notes: isReschedule
+        ? `Follow-up rescheduled (${type}) — ${nextAction}`
+        : `Follow-up scheduled (${type}) — ${nextAction}`,
+      outcome: isReschedule ? "Rescheduled" : "Scheduled",
       nextAction,
       followUpId: followUp.id,
-      event: "FOLLOW_UP_CREATED",
+      event: isReschedule ? "FOLLOW_UP_RESCHEDULED" : "FOLLOW_UP_CREATED",
       meta,
     });
   }
 
   await writeAuditLog({
     userId: auth.user.id,
-    action: "FOLLOW_UP_CREATED",
+    action: isReschedule ? "FOLLOW_UP_RESCHEDULED" : "FOLLOW_UP_CREATED",
     entityType: "lead",
     entityId: input.leadId,
     ipAddress: meta.ipAddress,
@@ -471,7 +487,7 @@ export async function scheduleLeadFollowUp(
       type,
       purpose,
       nextAction,
-      supersededFollowUpIds: superseded.map((item) => item.id),
+      supersededFollowUpIds: priorOpen.map((item) => item.id),
     },
   });
 
@@ -606,7 +622,7 @@ export async function completeFollowUp(
     );
   }
 
-  const notes = asOptionalString(body.notes, 1000);
+  const notes = asOptionalString(body.notes, 500);
   const createNext =
     body.createNextFollowUp === true ||
     body.createNextFollowUp === "true" ||
