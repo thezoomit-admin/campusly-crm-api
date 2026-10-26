@@ -16,7 +16,7 @@ import {
   permissionLabel,
   userDirectoryScope,
 } from "../auth/access";
-import { normalizeEmail, normalizeUsername } from "../auth/identifier";
+import { normalizeEmail, normalizeUsername, usernameValidationError } from "../auth/identifier";
 import { hashPassword } from "../auth/password";
 import { sendAccountInvite } from "../auth/password-reset.service";
 import type { AuthContext } from "../auth/session.service";
@@ -696,6 +696,90 @@ export async function updateUser(
     });
 
     return { user: serializeUser(user), reset };
+  } catch (error) {
+    rethrowUnique(error);
+  }
+}
+
+/** Signed-in user may change only their own name, username, mobile, and photo. */
+export async function updateOwnProfile(
+  auth: AuthContext,
+  input: Record<string, unknown>,
+  meta: { ipAddress?: string; userAgent?: string },
+  photo?: Express.Multer.File,
+) {
+  const id = auth.user.id;
+  const existing = await prisma.user.findUnique({ where: { id } });
+  if (!existing) {
+    throw httpError.notFound("User not found.");
+  }
+
+  const data: Prisma.UserUpdateInput = {};
+  const changes: Record<string, unknown> = {};
+  let nextFullName: string | null = null;
+  let nextMobile: string | null = null;
+
+  if (typeof input.fullName === "string") {
+    const fullName = input.fullName.trim();
+    if (fullName.length < 2 || fullName.length > 100) {
+      throw httpError.badRequest("Full name must be 2–100 characters.");
+    }
+    data.fullName = fullName;
+    changes.fullName = fullName;
+    nextFullName = fullName;
+  }
+
+  if (typeof input.username === "string") {
+    const usernameError = usernameValidationError(input.username);
+    if (usernameError) {
+      throw httpError.badRequest(usernameError);
+    }
+    const username = normalizeUsername(input.username);
+    data.username = username;
+    changes.username = username;
+  }
+
+  if (typeof input.mobile === "string") {
+    const mobile = parseMobile(input.mobile);
+    if (!isValidMobile(mobile)) {
+      throw httpError.badRequest("Please enter a valid mobile number.");
+    }
+    data.mobile = mobile;
+    changes.mobile = mobile;
+    nextMobile = mobile;
+  }
+
+  if (!photo && Object.keys(data).length === 0) {
+    throw httpError.badRequest("Nothing to update.");
+  }
+
+  try {
+    if (Object.keys(data).length > 0) {
+      await prisma.user.update({ where: { id }, data });
+    }
+    if (nextFullName || nextMobile) {
+      await prisma.employee.updateMany({
+        where: { userId: id },
+        data: {
+          ...(nextFullName ? { fullName: nextFullName } : {}),
+          ...(nextMobile ? { mobile: nextMobile } : {}),
+        },
+      });
+    }
+    if (photo) {
+      await applyUserPhoto(id, photo);
+      changes.photo = true;
+    }
+
+    await writeAuditLog({
+      userId: id,
+      action: "USER_UPDATED",
+      entityType: "user",
+      entityId: id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: { self: true, ...changes } as Prisma.InputJsonValue,
+    });
   } catch (error) {
     rethrowUnique(error);
   }

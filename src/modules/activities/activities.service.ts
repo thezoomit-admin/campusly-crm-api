@@ -542,6 +542,9 @@ export async function listActivityFeed(
     category?: string;
     userId?: string;
     relatedId?: string;
+    /** When false, only the requested window is loaded. */
+    compare?: boolean;
+    take?: number;
   },
 ) {
   const now = new Date();
@@ -557,9 +560,12 @@ export async function listActivityFeed(
     );
   }
 
+  const compare = query.compare !== false;
   const duration = to.getTime() - from.getTime();
   const prevTo = new Date(from.getTime() - 1);
-  const prevFrom = new Date(prevTo.getTime() - duration);
+  const prevFrom = compare ? new Date(prevTo.getTime() - duration) : from;
+  const windowStart = compare ? prevFrom : from;
+  const take = Math.min(Math.max(query.take ?? 2000, 1), 5000);
   const scope = scopeWhere(auth);
   // Lead-scoped feeds show every actor on that lead so status changes include who changed them.
   const userFilter = query.userId
@@ -578,25 +584,25 @@ export async function listActivityFeed(
       where: {
         ...userFilter,
         ...relatedFilter,
-        occurredAt: { gte: prevFrom, lte: to },
+        occurredAt: { gte: windowStart, lte: to },
       },
       include: {
         user: { select: activityUserSelect },
       },
       orderBy: { occurredAt: "desc" },
-      take: 2000,
+      take,
     }),
     prisma.auditLog.findMany({
       where: {
         ...userFilter,
         ...auditRelatedFilter,
-        createdAt: { gte: prevFrom, lte: to },
+        createdAt: { gte: windowStart, lte: to },
       },
       include: {
         user: { select: activityUserSelect },
       },
       orderBy: { createdAt: "desc" },
-      take: 2000,
+      take,
     }),
   ]);
 

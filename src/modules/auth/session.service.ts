@@ -230,6 +230,33 @@ export async function loadAuthFromToken(
   });
 }
 
+/** Rebuild the signed-in context after the current user edits their own profile. */
+export async function refreshAuthContext(sessionId: string): Promise<AuthContext | null> {
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: {
+      user: { include: userAuthInclude },
+    },
+  });
+
+  if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+    return null;
+  }
+
+  if (
+    !session.user.primaryRole ||
+    session.user.status !== "ACTIVE" ||
+    session.user.primaryRole.status !== "ACTIVE"
+  ) {
+    return null;
+  }
+
+  return buildAuthContext({
+    sessionId: session.id,
+    user: { ...session.user, primaryRole: session.user.primaryRole },
+  });
+}
+
 export async function revokeSession(sessionId: string) {
   await prisma.session.update({
     where: { id: sessionId },
