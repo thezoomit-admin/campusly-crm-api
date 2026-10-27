@@ -55,42 +55,57 @@ const REMINDER_EVENT_TYPES = new Set([
   "follow_up_due",
 ]);
 
-export async function ensureNotificationConfigs() {
-  for (const event of NOTIFICATION_EVENTS) {
-    // Reminder/due events must stay deliverable — sync mandatory in-app from catalog
-    // so older DB rows (mandatory:false) cannot silently drop owner notifications.
-    const reminderSync = REMINDER_EVENT_TYPES.has(event.eventType)
-      ? {
+/** One catalog sync per process — avoid upserting every event on each dispatch. */
+let notificationConfigsReady: Promise<void> | null = null;
+
+async function syncNotificationConfigs() {
+  await Promise.all(
+    NOTIFICATION_EVENTS.map((event) => {
+      // Reminder/due events must stay deliverable — sync mandatory in-app from catalog
+      // so older DB rows (mandatory:false) cannot silently drop owner notifications.
+      const reminderSync = REMINDER_EVENT_TYPES.has(event.eventType)
+        ? {
+            enabled: event.enabled,
+            mandatory: event.mandatory,
+            priority: event.priority,
+            inApp: event.inApp,
+            label: event.label,
+            description: event.description,
+          }
+        : {};
+
+      return prisma.notificationEventConfig.upsert({
+        where: { eventType: event.eventType },
+        create: {
+          eventType: event.eventType,
+          label: event.label,
+          description: event.description,
           enabled: event.enabled,
           mandatory: event.mandatory,
           priority: event.priority,
           inApp: event.inApp,
-          label: event.label,
-          description: event.description,
-        }
-      : {};
+          email: event.email,
+          whatsapp: event.whatsapp,
+          browser: event.browser,
+          recipientRule: event.recipientRule,
+          notifyPreviousOwner: event.notifyPreviousOwner,
+          overdueAfterMinutes: event.overdueAfterMinutes,
+          statusAllowlist: event.statusAllowlist ?? undefined,
+        },
+        update: reminderSync,
+      });
+    }),
+  );
+}
 
-    await prisma.notificationEventConfig.upsert({
-      where: { eventType: event.eventType },
-      create: {
-        eventType: event.eventType,
-        label: event.label,
-        description: event.description,
-        enabled: event.enabled,
-        mandatory: event.mandatory,
-        priority: event.priority,
-        inApp: event.inApp,
-        email: event.email,
-        whatsapp: event.whatsapp,
-        browser: event.browser,
-        recipientRule: event.recipientRule,
-        notifyPreviousOwner: event.notifyPreviousOwner,
-        overdueAfterMinutes: event.overdueAfterMinutes,
-        statusAllowlist: event.statusAllowlist ?? undefined,
-      },
-      update: reminderSync,
+export async function ensureNotificationConfigs() {
+  if (!notificationConfigsReady) {
+    notificationConfigsReady = syncNotificationConfigs().catch((error) => {
+      notificationConfigsReady = null;
+      throw error;
     });
   }
+  await notificationConfigsReady;
 }
 
 async function loadConfig(
@@ -236,7 +251,8 @@ async function deliverExternal(input: {
       attempts: 0,
     },
   });
-  await attemptDelivery(delivery.id, input);
+  // SMTP / WhatsApp must not block the API response; retry job also picks up Pending.
+  void attemptDelivery(delivery.id, input);
 }
 
 async function attemptDelivery(
