@@ -3326,54 +3326,59 @@ export async function assignLead(
       },
     });
 
-    // Auto first follow-up only on first assign from pool (CRM-005 Rule-18).
-    // Reassignment must not spawn extra note/follow-up activity noise.
-    try {
-      if (isUnassigned) {
-        const { createSystemFollowUp, defaultFirstContactDueAt } =
-          await import("../follow-ups/system-follow-up");
-        await createSystemFollowUp({
-          leadId: lead.id,
-          contactName: lead.name,
-          type: "Call",
-          purpose: "Initial Contact",
-          nextAction: "Make first contact call",
-          dueAt: await defaultFirstContactDueAt(),
-          priority: lead.priority || "Medium",
-          ownerId: assignee.id,
-          ownerName: assignee.fullName,
-          reason: "Lead Assigned — First Follow-up",
-          actorUserId: auth.user.id,
-          meta,
-          // Follow-up remains on Follow-up History / queue; avoid Activities clutter.
-          logActivity: false,
+    // Assign / reassign must not auto-create a follow-up. Follow-ups are scheduled
+    // explicitly (status change, note, reopen, etc.).
+    // Notify in the background so the Assign modal is not blocked on email/config sync.
+    const assignNotify = {
+      eventType: isUnassigned ? "lead_assigned" : "lead_reassigned",
+      assignmentId,
+      leadId: lead.id,
+      leadName: lead.name,
+      leadCode: lead.code,
+      country: lead.country || null,
+      ownerId: assignee.id,
+      previousOwnerId: fromOwnerId,
+      assignedBy: isUnassigned ? "System" : auth.user.fullName,
+      isUnassigned,
+    };
+    void (async () => {
+      try {
+        const { dispatchCrmEvent } = await import(
+          "../notifications/notifications.service"
+        );
+        const when = await formatWorkspaceDateTime(new Date());
+        await dispatchCrmEvent({
+          eventType: assignNotify.eventType,
+          dedupeKey: `lead-assigned:${assignNotify.assignmentId}`,
+          title: assignNotify.isUnassigned
+            ? "New Lead Assigned"
+            : "Lead Reassigned",
+          body: assignNotify.isUnassigned
+            ? `Lead: ${assignNotify.leadName} — Lead ID: ${assignNotify.leadCode} — Country: ${assignNotify.country || "—"}`
+            : `Lead: ${assignNotify.leadName} — You are now responsible for this Lead.`,
+          link: `/leads/${assignNotify.leadId}`,
+          leadId: assignNotify.leadId,
+          ownerId: assignNotify.ownerId,
+          previousOwnerId: assignNotify.previousOwnerId,
+          payload: {
+            leadName: assignNotify.leadName,
+            leadCode: assignNotify.leadCode,
+            country: assignNotify.country,
+            assignedBy: assignNotify.assignedBy,
+            assignedAt: when,
+          },
+          actions: [
+            {
+              key: "open_lead",
+              label: "Open Lead",
+              href: `/leads/${assignNotify.leadId}`,
+            },
+          ],
         });
+      } catch (error) {
+        console.error("[notifications] Lead assign notification failed:", error);
       }
-      const { dispatchCrmEvent } = await import("../notifications/notifications.service");
-      const when = await formatWorkspaceDateTime(new Date());
-      await dispatchCrmEvent({
-        eventType: isUnassigned ? "lead_assigned" : "lead_reassigned",
-        dedupeKey: `lead-assigned:${assignmentId}`,
-        title: isUnassigned ? "New Lead Assigned" : "Lead Reassigned",
-        body: isUnassigned
-          ? `Lead: ${lead.name} — Lead ID: ${lead.code} — Country: ${lead.country || "—"}`
-          : `Lead: ${lead.name} — You are now responsible for this Lead.`,
-        link: `/leads/${lead.id}`,
-        leadId: lead.id,
-        ownerId: assignee.id,
-        previousOwnerId: fromOwnerId,
-        payload: {
-          leadName: lead.name,
-          leadCode: lead.code,
-          country: lead.country || null,
-          assignedBy: isUnassigned ? "System" : auth.user.fullName,
-          assignedAt: when,
-        },
-        actions: [{ key: "open_lead", label: "Open Lead", href: `/leads/${lead.id}` }],
-      });
-    } catch (error) {
-      console.error("[follow-ups] Auto follow-up on assign failed:", error);
-    }
+    })();
 
     return {
       lead: serializeLead(lead),
