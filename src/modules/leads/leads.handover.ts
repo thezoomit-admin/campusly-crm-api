@@ -246,6 +246,7 @@ export async function handoverLead(auth: AuthContext, id: string, body: Record<s
 
       await tx.activity.create({
         data: {
+          // Stored as NOTE (ActivityType has no HANDOVER); feed maps via metadata.event.
           type: 'NOTE',
           userId: auth.user.id,
           notes: `Lead handed over from ${fromOwnerName || 'Unassigned'} to ${counsellor.fullName}`,
@@ -254,6 +255,7 @@ export async function handoverLead(auth: AuthContext, id: string, body: Record<s
           relatedId: id,
           outcome: 'Handed over',
           metadata: {
+            event: 'LEAD_HANDED_OVER',
             action: 'handover',
             fromOwnerId,
             fromOwnerName,
@@ -303,23 +305,8 @@ export async function handoverLead(auth: AuthContext, id: string, body: Record<s
       },
     })
 
+    // Handover must not auto-create a follow-up (same as assign/reassign).
     try {
-      const { createSystemFollowUp, daysFromNow } = await import('../follow-ups/system-follow-up')
-      await createSystemFollowUp({
-        leadId: lead.id,
-        contactName: lead.name,
-        type: 'Counselling',
-        purpose: 'Counselling',
-        nextAction: 'Start counselling session',
-        dueAt: daysFromNow(1),
-        priority: lead.priority || 'Medium',
-        ownerId: counsellor.id,
-        ownerName: counsellor.fullName,
-        notes: note.importantConcern || note.conversationSummary,
-        reason: `Lead Handover — ${assignmentId}`,
-        actorUserId: auth.user.id,
-        meta,
-      })
       const { createNotification } = await import('../notifications/notifications.service')
       await createNotification({
         userId: counsellor.id,
@@ -331,7 +318,7 @@ export async function handoverLead(auth: AuthContext, id: string, body: Record<s
         dedupeKey: `lead-handover:${assignmentId}`,
       })
     } catch (error) {
-      console.error('[leads] Handover notification or follow-up failed:', error)
+      console.error('[leads] Handover notification failed:', error)
     }
 
     return {

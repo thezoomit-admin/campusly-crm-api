@@ -154,6 +154,29 @@ function statusChangeActionKey(
   return null;
 }
 
+/** Handover is stored as a NOTE activity with handover metadata. */
+function handoverActionKey(
+  metadata: Record<string, unknown> | null,
+  notes: string | null,
+  outcome: string | null,
+): string | null {
+  if (!metadata && !notes && !outcome) return null;
+  const event = stringify(metadata?.event).toUpperCase();
+  if (event === "LEAD_HANDED_OVER") return "LEAD_HANDED_OVER";
+  const action = stringify(metadata?.action).toLowerCase();
+  if (action === "handover") return "LEAD_HANDED_OVER";
+  // Legacy rows: outcome "Handed over" + system note text, no event yet.
+  const outcomeText = (outcome || "").toLowerCase();
+  const note = (notes || "").toLowerCase();
+  if (
+    outcomeText === "handed over" ||
+    note.startsWith("lead handed over from")
+  ) {
+    return "LEAD_HANDED_OVER";
+  }
+  return null;
+}
+
 function statusChangeDetails(
   metadata: Record<string, unknown> | null,
   notes: string | null,
@@ -624,6 +647,34 @@ export async function listActivityFeed(
         relatedType: row.relatedType,
         relatedId: row.relatedId,
         outcome: row.outcome,
+        durationMin: row.durationMin,
+        nextAction: row.nextAction,
+        status: "Completed",
+        ipAddress: row.ipAddress,
+        userAgent: row.userAgent,
+        occurredAt: row.occurredAt,
+        user: toUserDto(row.user),
+        metadata,
+      };
+    }
+    const handoverKey = handoverActionKey(metadata, row.notes, row.outcome);
+    if (handoverKey) {
+      const from =
+        stringify(metadata?.fromOwnerName) || stringify(metadata?.from) || "Unassigned";
+      const to =
+        stringify(metadata?.toOwnerName) || stringify(metadata?.to) || "Counsellor";
+      return {
+        id: `activity:${row.id}`,
+        source: "activity" as const,
+        category: "assignment" as const,
+        action: "Assignment",
+        actionKey: handoverKey,
+        module: "Leads",
+        details: row.notes || `Lead handed over from ${from} to ${to}`,
+        relatedName: row.relatedName,
+        relatedType: row.relatedType,
+        relatedId: row.relatedId,
+        outcome: row.outcome || "Handed over",
         durationMin: row.durationMin,
         nextAction: row.nextAction,
         status: "Completed",
