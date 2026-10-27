@@ -18,6 +18,7 @@ import { emailRouter } from "./modules/email/email.routes";
 import { employeesRouter } from "./modules/employees/employees.routes";
 import { filesRouter } from "./modules/files/files.routes";
 import { followUpsRouter } from "./modules/follow-ups/follow-ups.routes";
+import { meetingsRouter } from "./modules/meetings/meetings.routes";
 import { healthRouter } from "./modules/health/health.routes";
 import { publicWebsiteRouter } from "./modules/integrations/public-website.routes";
 import { webhooksRouter } from "./modules/integrations/webhooks.routes";
@@ -127,6 +128,7 @@ export function createApp() {
   app.use("/api/leads", leadsRouter);
   app.use("/api/files", filesRouter);
   app.use("/api/follow-ups", followUpsRouter);
+  app.use("/api/meetings", meetingsRouter);
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/communications", communicationsRouter);
   app.use("/api/campaigns", campaignsRouter);
