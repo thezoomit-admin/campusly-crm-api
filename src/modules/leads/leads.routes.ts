@@ -43,6 +43,7 @@ import {
   getLeadDocumentHistory,
   listLeadDocuments,
   rejectLeadDocument,
+  restoreLeadDocument,
   uploadLeadDocument,
   verifyLeadDocument,
 } from "./leads.documents";
@@ -542,6 +543,28 @@ leadsRouter.post(
     try {
       res.json(
         await archiveLeadDocument(
+          req.auth!,
+          routeParam(req.params.id),
+          routeParam(req.params.documentId),
+          {
+            ipAddress: requestIp(req),
+            userAgent: requestUserAgent(req),
+          },
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+leadsRouter.post(
+  "/:id/documents/:documentId/restore",
+  requirePermission("document:delete"),
+  async (req, res, next) => {
+    try {
+      res.json(
+        await restoreLeadDocument(
           req.auth!,
           routeParam(req.params.id),
           routeParam(req.params.documentId),

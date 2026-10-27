@@ -284,6 +284,7 @@ async function recordLeadTimeline(input: {
   notes: string
   meta?: AuditMeta
   metadata?: Prisma.InputJsonValue
+  outcome?: string
 }) {
   await prisma.activity.create({
     data: {
@@ -293,7 +294,7 @@ async function recordLeadTimeline(input: {
       relatedName: input.leadName,
       relatedType: 'lead',
       relatedId: input.leadId,
-      outcome: 'Document',
+      outcome: input.outcome || 'Document',
       metadata: input.metadata,
       ipAddress: input.meta?.ipAddress,
       userAgent: input.meta?.userAgent,
@@ -964,9 +965,15 @@ export async function uploadFileDocument(
       leadName: lead.name,
       userId: auth.user.id,
       type: 'OTHER',
-      notes: `${document.typeNameSnapshot} ${reupload && mode !== 'additional' ? 're-uploaded' : 'uploaded'}.`,
+      notes: `Document uploaded: ${document.typeNameSnapshot}`,
+      outcome: 'Document uploaded',
       meta,
-      metadata: { fileId: crmFile.id, documentId: document.id, documentCode: document.code },
+      metadata: {
+        event: 'FILE_DOCUMENT_UPLOADED',
+        fileId: crmFile.id,
+        documentId: document.id,
+        documentCode: document.code,
+      },
     })
     await writeAuditLog({
       userId: auth.user.id,
@@ -1208,9 +1215,14 @@ export async function verifyFileDocument(
     leadName: lead.name,
     userId: auth.user.id,
     type: 'OTHER',
-    notes: `${document.typeNameSnapshot} verified.`,
+    notes: `Document verified: ${document.typeNameSnapshot}`,
+    outcome: 'Document verified',
     meta,
-    metadata: { documentId: document.id, fileId: file.id },
+    metadata: {
+      event: 'FILE_DOCUMENT_VERIFIED',
+      documentId: document.id,
+      fileId: file.id,
+    },
   })
   await writeAuditLog({
     userId: auth.user.id,
@@ -1274,9 +1286,14 @@ export async function rejectFileDocument(
     leadName: lead.name,
     userId: auth.user.id,
     type: 'OTHER',
-    notes: `${document.typeNameSnapshot} rejected (${master?.name || reasonText}). Re-upload required.`,
+    notes: `Document rejected: ${document.typeNameSnapshot} — ${master?.name || reasonText}`,
+    outcome: 'Document rejected',
     meta,
-    metadata: { documentId: document.id, fileId: file.id },
+    metadata: {
+      event: 'FILE_DOCUMENT_REJECTED',
+      documentId: document.id,
+      fileId: file.id,
+    },
   })
   await writeAuditLog({
     userId: auth.user.id,
@@ -1340,9 +1357,14 @@ export async function archiveFileDocument(auth: AuthContext, leadId: string, doc
     leadName: lead.name,
     userId: auth.user.id,
     type: 'OTHER',
-    notes: `${document.typeNameSnapshot} archived.`,
+    notes: `Document archived: ${document.typeNameSnapshot}`,
+    outcome: 'Document archived',
     meta,
-    metadata: { documentId: document.id, fileId: file.id },
+    metadata: {
+      event: 'FILE_DOCUMENT_ARCHIVED',
+      documentId: document.id,
+      fileId: file.id,
+    },
   })
   await writeAuditLog({
     userId: auth.user.id,

@@ -222,6 +222,53 @@ async function recordDocumentActivity(input: {
   })
 }
 
+type LeadDocumentTimelineEvent =
+  | 'LEAD_DOCUMENT_UPLOADED'
+  | 'LEAD_DOCUMENT_VERIFIED'
+  | 'LEAD_DOCUMENT_REJECTED'
+  | 'LEAD_DOCUMENT_ARCHIVED'
+  | 'LEAD_DOCUMENT_RESTORED'
+
+const LEAD_DOCUMENT_TIMELINE_OUTCOME: Record<LeadDocumentTimelineEvent, string> = {
+  LEAD_DOCUMENT_UPLOADED: 'Document uploaded',
+  LEAD_DOCUMENT_VERIFIED: 'Document verified',
+  LEAD_DOCUMENT_REJECTED: 'Document rejected',
+  LEAD_DOCUMENT_ARCHIVED: 'Document archived',
+  LEAD_DOCUMENT_RESTORED: 'Document restored',
+}
+
+/** Lead Activities feed entry for document lifecycle (upload / verify / reject / archive). */
+async function recordLeadDocumentTimeline(input: {
+  leadId: string
+  leadName: string
+  userId: string
+  event: LeadDocumentTimelineEvent
+  documentId: string
+  documentName: string
+  notes?: string
+  meta: AuditMeta
+}) {
+  const outcome = LEAD_DOCUMENT_TIMELINE_OUTCOME[input.event]
+  await prisma.activity.create({
+    data: {
+      type: 'OTHER',
+      userId: input.userId,
+      notes: input.notes || `${outcome}: ${input.documentName}`,
+      relatedName: input.leadName,
+      relatedType: 'lead',
+      relatedId: input.leadId,
+      outcome,
+      metadata: {
+        event: input.event,
+        documentId: input.documentId,
+        documentName: input.documentName,
+      },
+      ipAddress: input.meta.ipAddress,
+      userAgent: input.meta.userAgent,
+    },
+  })
+}
+
 async function notifyLeadOwner(input: {
   leadId: string
   ownerId: string | null | undefined
@@ -475,18 +522,18 @@ export async function uploadLeadDocument(
         metadata: { previousDocumentId: existing.id, duplicateAction },
       })
 
-      await prisma.activity.create({
-        data: {
-          type: 'NOTE',
-          userId: auth.user.id,
-          notes: `Document ${duplicateAction === 'replace' ? 'replaced' : 'version uploaded'}: ${created.name}`,
-          relatedName: lead.name,
-          relatedType: 'lead',
-          relatedId: lead.id,
-          outcome: 'Document uploaded',
-          ipAddress: meta.ipAddress,
-          userAgent: meta.userAgent,
-        },
+      await recordLeadDocumentTimeline({
+        leadId,
+        leadName: lead.name,
+        userId: auth.user.id,
+        event: 'LEAD_DOCUMENT_UPLOADED',
+        documentId: created.id,
+        documentName: created.name,
+        notes:
+          duplicateAction === 'replace'
+            ? `Document replaced: ${created.name}`
+            : `Document uploaded: ${created.name}`,
+        meta,
       })
 
       await writeAuditLog({
@@ -548,18 +595,15 @@ export async function uploadLeadDocument(
       notes: `Uploaded ${created.name}`,
     })
 
-    await prisma.activity.create({
-      data: {
-        type: 'NOTE',
-        userId: auth.user.id,
-        notes: `Document uploaded: ${created.name}`,
-        relatedName: lead.name,
-        relatedType: 'lead',
-        relatedId: lead.id,
-        outcome: 'Document uploaded',
-        ipAddress: meta.ipAddress,
-        userAgent: meta.userAgent,
-      },
+    await recordLeadDocumentTimeline({
+      leadId,
+      leadName: lead.name,
+      userId: auth.user.id,
+      event: 'LEAD_DOCUMENT_UPLOADED',
+      documentId: created.id,
+      documentName: created.name,
+      notes: `Document uploaded: ${created.name}`,
+      meta,
     })
 
     await writeAuditLog({
@@ -637,6 +681,19 @@ export async function verifyLeadDocument(
     notes: remarks || 'Document verified',
   })
 
+  await recordLeadDocumentTimeline({
+    leadId,
+    leadName: lead.name,
+    userId: auth.user.id,
+    event: 'LEAD_DOCUMENT_VERIFIED',
+    documentId: updated.id,
+    documentName: updated.name,
+    notes: remarks
+      ? `Document verified: ${updated.name} — ${remarks}`
+      : `Document verified: ${updated.name}`,
+    meta,
+  })
+
   await writeAuditLog({
     userId: auth.user.id,
     action: 'LEAD_DOCUMENT_VERIFIED',
@@ -699,6 +756,17 @@ export async function rejectLeadDocument(
     notes: reason,
   })
 
+  await recordLeadDocumentTimeline({
+    leadId,
+    leadName: lead.name,
+    userId: auth.user.id,
+    event: 'LEAD_DOCUMENT_REJECTED',
+    documentId: updated.id,
+    documentName: updated.name,
+    notes: `Document rejected: ${updated.name} — ${reason}`,
+    meta,
+  })
+
   await writeAuditLog({
     userId: auth.user.id,
     action: 'LEAD_DOCUMENT_REJECTED',
@@ -753,18 +821,15 @@ export async function archiveLeadDocument(auth: AuthContext, leadId: string, doc
     notes: `Archived ${updated.name}`,
   })
 
-  await prisma.activity.create({
-    data: {
-      type: 'NOTE',
-      userId: auth.user.id,
-      notes: `Document archived: ${document.name || document.fileName}`,
-      relatedName: lead.name,
-      relatedType: 'lead',
-      relatedId: lead.id,
-      outcome: 'Document archived',
-      ipAddress: meta.ipAddress,
-      userAgent: meta.userAgent,
-    },
+  await recordLeadDocumentTimeline({
+    leadId,
+    leadName: lead.name,
+    userId: auth.user.id,
+    event: 'LEAD_DOCUMENT_ARCHIVED',
+    documentId: updated.id,
+    documentName: document.name || document.fileName,
+    notes: `Document archived: ${document.name || document.fileName}`,
+    meta,
   })
 
   await writeAuditLog({
@@ -778,6 +843,70 @@ export async function archiveLeadDocument(auth: AuthContext, leadId: string, doc
   })
 
   return { message: 'Document archived.', document: serializeDocument(updated) }
+}
+
+export async function restoreLeadDocument(auth: AuthContext, leadId: string, documentId: string, meta: AuditMeta) {
+  if (!hasPermission(auth.permissions, 'document:delete')) {
+    throw httpError.accessDenied('You are not authorized to access this document.')
+  }
+  const lead = await assertCanViewLead(auth, leadId)
+  const document = await loadDocument(leadId, documentId, true)
+  assertCanAccessDocumentContent(auth, document)
+
+  if (!document.archivedAt) {
+    throw httpError.validation({ documentId: 'Document is not archived.' }, 'Document is not archived.')
+  }
+
+  const activeSameType = await prisma.leadDocument.findFirst({
+    where: {
+      leadId,
+      typeCode: document.typeCode,
+      isLatest: true,
+      archivedAt: null,
+      id: { not: document.id },
+    },
+  })
+  if (activeSameType) {
+    throw httpError.conflict(
+      `An active ${document.name || document.typeCode} document already exists. Archive it before restoring this one.`,
+    )
+  }
+
+  const updated = await prisma.leadDocument.update({
+    where: { id: document.id },
+    data: { archivedAt: null, isLatest: true },
+    include: DOCUMENT_INCLUDE,
+  })
+
+  await recordDocumentActivity({
+    documentId: updated.id,
+    action: 'RESTORED',
+    userId: auth.user.id,
+    notes: `Restored ${updated.name}`,
+  })
+
+  await recordLeadDocumentTimeline({
+    leadId,
+    leadName: lead.name,
+    userId: auth.user.id,
+    event: 'LEAD_DOCUMENT_RESTORED',
+    documentId: updated.id,
+    documentName: document.name || document.fileName,
+    notes: `Document restored: ${document.name || document.fileName}`,
+    meta,
+  })
+
+  await writeAuditLog({
+    userId: auth.user.id,
+    action: 'LEAD_DOCUMENT_RESTORED',
+    entityType: 'lead',
+    entityId: leadId,
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+    metadata: { fileName: document.fileName, documentId: document.id, leadCode: lead.code },
+  })
+
+  return { message: 'Document restored.', document: serializeDocument(updated) }
 }
 
 /** Soft-archive (CRM-025). Kept name for route compatibility. */
