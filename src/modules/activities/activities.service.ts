@@ -437,8 +437,10 @@ function skipAuditAction(action: string) {
     action === "LEAD_REOPENED" ||
     action === "LEAD_HANDED_OVER" ||
     action === "LEAD_QUALIFIED" ||
-    // Note create already writes an Activity row (or the client logs one and skips a second).
-    action === "LEAD_NOTE_ADDED"
+    // Note create/update/delete already write Activity rows.
+    action === "LEAD_NOTE_ADDED" ||
+    action === "LEAD_NOTE_UPDATED" ||
+    action === "LEAD_NOTE_DELETED"
   );
 }
 

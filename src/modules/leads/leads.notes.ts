@@ -252,6 +252,20 @@ export async function updateLeadNote(
         data: { notes: text, updatedById: auth.user.id },
       })
     }
+    await tx.activity.create({
+      data: {
+        type: 'NOTE',
+        userId: auth.user.id,
+        notes: text,
+        relatedName: lead.name,
+        relatedType: 'lead',
+        relatedId: lead.id,
+        outcome: 'Note edited',
+        metadata: { noteId: note.id, action: 'NOTE_EDITED' },
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      },
+    })
     return saved
   })
 
@@ -433,7 +447,7 @@ export async function recordLeadNoteChange(
       relatedName: input.leadName,
       relatedType: 'lead',
       relatedId: input.leadId,
-      outcome: 'Note updated',
+      outcome: 'Note edited',
       ipAddress: input.meta.ipAddress,
       userAgent: input.meta.userAgent,
     },
