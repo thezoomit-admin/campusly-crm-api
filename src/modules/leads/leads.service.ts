@@ -1300,8 +1300,18 @@ export async function getLead(auth: AuthContext, id: string) {
     },
     data: { status: "Overdue" },
   });
-  const [lead, nextFollowUp, statusItems, applications, student, crmFile] =
-    await Promise.all([
+  await ensureLegacyNoteSeed(id);
+  const [
+    lead,
+    nextFollowUp,
+    statusItems,
+    applications,
+    student,
+    crmFile,
+    documentCount,
+    noteCount,
+    activityCount,
+  ] = await Promise.all([
       prisma.lead.findUniqueOrThrow({ where: { id }, include: leadInclude }),
       prisma.followUp.findFirst({
         where: {
@@ -1343,6 +1353,13 @@ export async function getLead(auth: AuthContext, id: string) {
       prisma.crmFile.findUnique({
         where: { leadId: id },
         select: { id: true, code: true, status: true },
+      }),
+      prisma.leadDocument.count({
+        where: { leadId: id, archivedAt: null, isLatest: true },
+      }),
+      prisma.leadNote.count({ where: { leadId: id, deletedAt: null } }),
+      prisma.activity.count({
+        where: { relatedId: id, relatedType: "lead" },
       }),
     ]);
   const hasPhoneDuplicate = lead.phoneNormalized
@@ -1386,6 +1403,11 @@ export async function getLead(auth: AuthContext, id: string) {
       crmFile: crmFile
         ? { id: crmFile.id, code: crmFile.code, status: crmFile.status }
         : null,
+      tabCounts: {
+        documents: documentCount,
+        notes: noteCount,
+        activities: activityCount,
+      },
       nextFollowUp: nextFollowUp
         ? {
             id: nextFollowUp.id,
