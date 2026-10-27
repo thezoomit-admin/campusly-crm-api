@@ -8,10 +8,6 @@ import { HttpError, httpError } from "../../lib/http-error";
 import { prisma } from "../../lib/prisma";
 import { hasPermission } from "../auth/access";
 import type { AuthContext } from "../auth/session.service";
-import {
-  createSystemFollowUp,
-  daysFromNow,
-} from "../follow-ups/system-follow-up";
 import { assertCanViewLead } from "../leads/leads.helpers";
 import { calculateOffer, type CalculatorDiscount } from "./offer-calculator";
 import {
@@ -975,30 +971,10 @@ async function generate(
       meta,
     });
   });
-  const row = await prisma.serviceOffer.findUniqueOrThrow({
+  return prisma.serviceOffer.findUniqueOrThrow({
     where: { id: offerId },
     include: offerInclude,
   });
-  try {
-    await createSystemFollowUp({
-      leadId: lead.id,
-      contactName: lead.name,
-      type: "Call",
-      purpose: "Service Charge Discussion",
-      nextAction: "Follow up on the service offer",
-      dueAt: daysFromNow(2),
-      priority: lead.priority || "Medium",
-      ownerId: lead.ownerId || auth.user.id,
-      ownerName: lead.ownerName || auth.user.fullName,
-      notes: `Service offer generated — Final payable BDT ${money(row.finalPayable)}`,
-      reason: `Service Offered — ${row.id}`,
-      actorUserId: auth.user.id,
-      meta,
-    });
-  } catch (error) {
-    console.error("Service offer follow-up could not be created", error);
-  }
-  return row;
 }
 
 export async function saveLeadServiceOffer(
