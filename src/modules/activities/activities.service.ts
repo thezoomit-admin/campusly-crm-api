@@ -177,6 +177,62 @@ function handoverActionKey(
   return null;
 }
 
+/** Document lifecycle rows on the lead Activities feed. */
+function documentActionKey(
+  metadata: Record<string, unknown> | null,
+  notes: string | null,
+  outcome: string | null,
+): string | null {
+  const event = stringify(metadata?.event).toUpperCase();
+  if (
+    event === "LEAD_DOCUMENT_UPLOADED" ||
+    event === "LEAD_DOCUMENT_VERIFIED" ||
+    event === "LEAD_DOCUMENT_REJECTED" ||
+    event === "LEAD_DOCUMENT_ARCHIVED" ||
+    event === "LEAD_DOCUMENT_RESTORED" ||
+    event === "FILE_DOCUMENT_UPLOADED" ||
+    event === "FILE_DOCUMENT_VERIFIED" ||
+    event === "FILE_DOCUMENT_REJECTED" ||
+    event === "FILE_DOCUMENT_ARCHIVED"
+  ) {
+    return event;
+  }
+
+  const outcomeText = (outcome || "").toLowerCase().trim();
+  if (outcomeText === "document uploaded") return "LEAD_DOCUMENT_UPLOADED";
+  if (outcomeText === "document verified") return "LEAD_DOCUMENT_VERIFIED";
+  if (outcomeText === "document rejected") return "LEAD_DOCUMENT_REJECTED";
+  if (outcomeText === "document archived") return "LEAD_DOCUMENT_ARCHIVED";
+  if (outcomeText === "document restored") return "LEAD_DOCUMENT_RESTORED";
+
+  const note = (notes || "").toLowerCase();
+  if (
+    note.startsWith("document uploaded:") ||
+    note.startsWith("document replaced:") ||
+    note.startsWith("document version uploaded:")
+  ) {
+    return "LEAD_DOCUMENT_UPLOADED";
+  }
+  if (note.startsWith("document verified:")) return "LEAD_DOCUMENT_VERIFIED";
+  if (note.startsWith("document rejected:")) return "LEAD_DOCUMENT_REJECTED";
+  if (note.startsWith("document archived:")) return "LEAD_DOCUMENT_ARCHIVED";
+  if (note.startsWith("document restored:")) return "LEAD_DOCUMENT_RESTORED";
+  // File-document timeline notes: "Passport verified." / "Passport uploaded."
+  if (/\bverified\.?\s*$/.test(note) || note.includes(" verified.")) {
+    return "FILE_DOCUMENT_VERIFIED";
+  }
+  if (/\brejected\b/.test(note) && note.includes("re-upload")) {
+    return "FILE_DOCUMENT_REJECTED";
+  }
+  if (/\barchived\.?\s*$/.test(note) || note.includes(" archived.")) {
+    return "FILE_DOCUMENT_ARCHIVED";
+  }
+  if (/\b(uploaded|re-uploaded)\.?\s*$/.test(note)) {
+    return "FILE_DOCUMENT_UPLOADED";
+  }
+  return null;
+}
+
 function statusChangeDetails(
   metadata: Record<string, unknown> | null,
   notes: string | null,
@@ -463,7 +519,17 @@ function skipAuditAction(action: string) {
     // Note create/update/delete already write Activity rows.
     action === "LEAD_NOTE_ADDED" ||
     action === "LEAD_NOTE_UPDATED" ||
-    action === "LEAD_NOTE_DELETED"
+    action === "LEAD_NOTE_DELETED" ||
+    // Document lifecycle already writes Activity rows.
+    action === "LEAD_DOCUMENT_UPLOADED" ||
+    action === "LEAD_DOCUMENT_VERIFIED" ||
+    action === "LEAD_DOCUMENT_REJECTED" ||
+    action === "LEAD_DOCUMENT_ARCHIVED" ||
+    action === "LEAD_DOCUMENT_RESTORED" ||
+    action === "FILE_DOCUMENT_UPLOADED" ||
+    action === "FILE_DOCUMENT_VERIFIED" ||
+    action === "FILE_DOCUMENT_REJECTED" ||
+    action === "FILE_DOCUMENT_ARCHIVED"
   );
 }
 
@@ -675,6 +741,30 @@ export async function listActivityFeed(
         relatedType: row.relatedType,
         relatedId: row.relatedId,
         outcome: row.outcome || "Handed over",
+        durationMin: row.durationMin,
+        nextAction: row.nextAction,
+        status: "Completed",
+        ipAddress: row.ipAddress,
+        userAgent: row.userAgent,
+        occurredAt: row.occurredAt,
+        user: toUserDto(row.user),
+        metadata,
+      };
+    }
+    const documentKey = documentActionKey(metadata, row.notes, row.outcome);
+    if (documentKey) {
+      return {
+        id: `activity:${row.id}`,
+        source: "activity" as const,
+        category: "document" as const,
+        action: "Document",
+        actionKey: documentKey,
+        module: "Documents",
+        details: row.notes || activityDetails(row),
+        relatedName: row.relatedName,
+        relatedType: row.relatedType,
+        relatedId: row.relatedId,
+        outcome: row.outcome,
         durationMin: row.durationMin,
         nextAction: row.nextAction,
         status: "Completed",
