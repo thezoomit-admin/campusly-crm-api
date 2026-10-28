@@ -1051,6 +1051,7 @@ export async function listGlobalLeadDocuments(
     take: 500,
   })
 
+  const now = Date.now()
   let items = rows.map((row) => ({
     id: row.id,
     leadId: row.lead.id,
@@ -1061,10 +1062,18 @@ export async function listGlobalLeadDocuments(
     typeCode: row.typeCode,
     category: row.categoryCode,
     uploadedBy: row.uploadedBy?.fullName || '—',
+    verifiedBy: row.verifiedBy?.fullName || '—',
     status: statusLabel(row.status),
     statusCode: row.status,
+    expiryStatus:
+      row.status === 'EXPIRED' ? ('EXPIRED' as const) : row.expiryDate ? ('VALID' as const) : ('NONE' as const),
+    expiryDate: row.expiryDate ? row.expiryDate.toISOString().slice(0, 10) : null,
+    hasFile: true,
+    requirement: null as 'REQUIRED' | 'OPTIONAL' | null,
     updated: row.updatedAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
+    ageDays: Math.max(0, Math.floor((now - row.updatedAt.getTime()) / 86_400_000)),
+    vault: 'lead' as const,
   }))
 
   if (search) {
@@ -1089,9 +1098,22 @@ export async function listGlobalLeadDocuments(
     items = items.filter((row) => missingLeadIds.has(row.leadId))
   }
 
+  const summary = {
+    total: items.length,
+    pending: items.filter((row) => row.statusCode === 'PENDING').length,
+    verified: items.filter((row) => row.statusCode === 'VERIFIED').length,
+    rejected: items.filter((row) => row.statusCode === 'REJECTED').length,
+    expired: items.filter((row) => row.statusCode === 'EXPIRED').length,
+    notRequested: 0,
+    requested: 0,
+    pendingReview: items.filter((row) => row.statusCode === 'PENDING').length,
+    missing: 0,
+    expiring: 0,
+  }
+
   const total = items.length
   const paged = items.slice((page - 1) * limit, page * limit)
-  return { items: paged, total, page, limit }
+  return { items: paged, total, page, limit, summary }
 }
 
 export async function expireLeadDocuments() {

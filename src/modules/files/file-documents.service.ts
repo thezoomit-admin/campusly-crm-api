@@ -1430,6 +1430,7 @@ export async function listGlobalFileDocuments(
     categoryCode?: string
     typeCode?: string
     status?: string
+    queue?: string
     uploadedById?: string
     verifiedById?: string
     expiryStatus?: string
@@ -1443,16 +1444,64 @@ export async function listGlobalFileDocuments(
   const page = Math.max(1, query.page || 1)
   const limit = Math.min(100, Math.max(5, query.limit || 20))
   const search = query.search?.trim().toLowerCase()
+  const queue = (query.queue || '').trim().toLowerCase()
+  const statusFilter = (query.status || '').trim().toUpperCase()
+
+  const queueStatusMap: Record<string, FileDocumentStatus[]> = {
+    not_requested: ['NOT_REQUESTED'],
+    requested: ['REQUESTED'],
+    pending_review: ['RECEIVED', 'UNDER_REVIEW'],
+    rejected: ['REJECTED', 'REUPLOAD_REQUIRED'],
+    verified: ['VERIFIED'],
+  }
+
+  const statusIn =
+    queue && queueStatusMap[queue]
+      ? queueStatusMap[queue]
+      : statusFilter
+        ? [statusFilter as FileDocumentStatus]
+        : undefined
+
+  const dateToBound = (() => {
+    if (!query.dateTo) return undefined
+    const to = new Date(query.dateTo)
+    if (Number.isNaN(to.getTime())) return undefined
+    to.setHours(23, 59, 59, 999)
+    return to
+  })()
+
   const rows = await prisma.fileDocument.findMany({
     where: {
       archivedAt: null,
       ...(query.categoryCode ? { categoryCode: query.categoryCode.toUpperCase() } : {}),
       ...(query.typeCode ? { typeCode: query.typeCode.toUpperCase() } : {}),
-      ...(query.status ? { status: query.status.toUpperCase() as FileDocumentStatus } : {}),
+      ...(statusIn ? { status: { in: statusIn } } : {}),
+      ...(query.uploadedById
+        ? { versions: { some: { isLatest: true, uploadedById: query.uploadedById } } }
+        : {}),
+      ...(query.verifiedById
+        ? { versions: { some: { isLatest: true, verifiedById: query.verifiedById } } }
+        : {}),
+      ...(query.dateFrom || dateToBound
+        ? {
+            updatedAt: {
+              ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
+              ...(dateToBound ? { lte: dateToBound } : {}),
+            },
+          }
+        : {}),
       file: { lead: leadScopeWhere(auth) },
     },
     include: {
-      file: { select: { id: true, code: true, studentName: true, leadId: true, lead: { select: { code: true, name: true } } } },
+      file: {
+        select: {
+          id: true,
+          code: true,
+          studentName: true,
+          leadId: true,
+          lead: { select: { code: true, name: true } },
+        },
+      },
       versions: {
         where: { isLatest: true },
         include: VERSION_INCLUDE,
@@ -1460,12 +1509,44 @@ export async function listGlobalFileDocuments(
       },
     },
     orderBy: { updatedAt: 'desc' },
-    take: 500,
+    take: 2000,
   })
 
-  let items = rows.map((row) => {
+  type MappedRow = {
+    id: string
+    code: string
+    fileId: string
+    fileCode: string
+    leadId: string
+    leadCode: string
+    owner: string
+    leadName: string
+    type: string
+    typeCode: string
+    category: string
+    categoryCode: string
+    requirement: 'REQUIRED' | 'OPTIONAL' | null
+    uploadedBy: string
+    uploadedById: string | null
+    verifiedBy: string
+    verifiedById: string | null
+    status: string
+    statusCode: string
+    expiryStatus: 'NONE' | 'VALID' | 'EXPIRING' | 'EXPIRED'
+    expiryDate: string | null
+    hasFile: boolean
+    assetCount: number
+    updated: string
+    createdAt: string
+    ageDays: number
+  }
+
+  const now = Date.now()
+  let items: MappedRow[] = rows.map((row) => {
     const latest = row.versions[0] || null
     const expired = expiryState(latest?.expiryDate)
+    const effectiveStatus =
+      expired === 'EXPIRED' && row.status === 'VERIFIED' ? 'Expired' : statusLabel(row.status)
     return {
       id: row.id,
       code: row.code,
@@ -1479,46 +1560,139 @@ export async function listGlobalFileDocuments(
       typeCode: row.typeCode,
       category: row.categoryNameSnapshot,
       categoryCode: row.categoryCode,
+      requirement: row.requirement,
       uploadedBy: latest?.uploadedBy?.fullName || '—',
       uploadedById: latest?.uploadedById || null,
       verifiedBy: latest?.verifiedBy?.fullName || '—',
       verifiedById: latest?.verifiedById || null,
-      status: expired === 'EXPIRED' && row.status === 'VERIFIED' ? 'Expired' : statusLabel(row.status),
+      status: effectiveStatus,
       statusCode: row.status,
       expiryStatus: expired,
+      expiryDate: latest?.expiryDate ? latest.expiryDate.toISOString().slice(0, 10) : null,
+      hasFile: Boolean(latest?.assets?.length),
+      assetCount: latest?.assets?.length || 0,
       updated: row.updatedAt.toISOString(),
       createdAt: latest?.createdAt.toISOString() || row.createdAt.toISOString(),
+      ageDays: Math.max(0, Math.floor((now - row.updatedAt.getTime()) / 86_400_000)),
     }
   })
 
   if (!canAccessSensitive(auth)) {
     items = items.filter((row) => !SENSITIVE_TYPES.has(row.typeCode))
   }
-  if (query.uploadedById) items = items.filter((row) => row.uploadedById === query.uploadedById)
-  if (query.verifiedById) items = items.filter((row) => row.verifiedById === query.verifiedById)
+
+  const summarySource = (
+    await prisma.fileDocument.findMany({
+      where: { archivedAt: null, file: { lead: leadScopeWhere(auth) } },
+      select: {
+        status: true,
+        requirement: true,
+        typeCode: true,
+        versions: {
+          where: { isLatest: true },
+          select: { expiryDate: true, assets: { select: { id: true }, take: 1 } },
+          take: 1,
+        },
+      },
+      take: 5000,
+    })
+  )
+    .filter((row) => canAccessSensitive(auth) || !SENSITIVE_TYPES.has(row.typeCode))
+    .map((row) => {
+      const latest = row.versions[0] || null
+      return {
+        statusCode: row.status,
+        requirement: row.requirement,
+        expiryStatus: expiryState(latest?.expiryDate),
+        hasFile: Boolean(latest?.assets?.length),
+      }
+    })
+
+  const summary = {
+    total: summarySource.length,
+    notRequested: summarySource.filter((row) => row.statusCode === 'NOT_REQUESTED').length,
+    requested: summarySource.filter((row) => row.statusCode === 'REQUESTED').length,
+    pendingReview: summarySource.filter(
+      (row) => row.statusCode === 'RECEIVED' || row.statusCode === 'UNDER_REVIEW',
+    ).length,
+    verified: summarySource.filter(
+      (row) => row.statusCode === 'VERIFIED' && row.expiryStatus !== 'EXPIRED',
+    ).length,
+    rejected: summarySource.filter(
+      (row) => row.statusCode === 'REJECTED' || row.statusCode === 'REUPLOAD_REQUIRED',
+    ).length,
+    missing: summarySource.filter(
+      (row) =>
+        row.requirement === 'REQUIRED' &&
+        (!row.hasFile || row.statusCode === 'NOT_REQUESTED' || row.statusCode === 'REQUESTED'),
+    ).length,
+    expiring: summarySource.filter((row) => row.expiryStatus === 'EXPIRING').length,
+    expired: summarySource.filter((row) => row.expiryStatus === 'EXPIRED').length,
+  }
+
   if (query.expiryStatus) {
     const wanted = query.expiryStatus.toUpperCase()
     items = items.filter((row) => row.expiryStatus === wanted)
   }
-  if (query.dateFrom) {
-    const from = new Date(query.dateFrom)
-    if (!Number.isNaN(from.getTime())) items = items.filter((row) => new Date(row.createdAt) >= from)
-  }
-  if (query.dateTo) {
-    const to = new Date(query.dateTo)
-    if (!Number.isNaN(to.getTime())) items = items.filter((row) => new Date(row.createdAt) <= to)
+  if (queue === 'expiring') items = items.filter((row) => row.expiryStatus === 'EXPIRING')
+  if (queue === 'expired') items = items.filter((row) => row.expiryStatus === 'EXPIRED')
+  if (queue === 'missing') {
+    items = items.filter(
+      (row) =>
+        row.requirement === 'REQUIRED' &&
+        (!row.hasFile || row.statusCode === 'NOT_REQUESTED' || row.statusCode === 'REQUESTED'),
+    )
   }
   if (search) {
     items = items.filter((row) =>
-      [row.code, row.fileCode, row.leadCode, row.leadName, row.type, row.category, row.uploadedBy, row.verifiedBy, row.status]
+      [
+        row.code,
+        row.fileCode,
+        row.leadCode,
+        row.leadName,
+        row.type,
+        row.category,
+        row.uploadedBy,
+        row.verifiedBy,
+        row.status,
+      ]
         .join(' ')
         .toLowerCase()
         .includes(search),
     )
   }
 
+  const actionScore = (row: MappedRow) => {
+    const requiredBoost = row.requirement === 'REQUIRED' ? 0 : 40
+    let statusScore = 50
+    const missingRequired =
+      row.requirement === 'REQUIRED' &&
+      (!row.hasFile || row.statusCode === 'NOT_REQUESTED' || row.statusCode === 'REQUESTED')
+    if (missingRequired || row.statusCode === 'NOT_REQUESTED') statusScore = 0
+    else if (row.statusCode === 'REJECTED' || row.statusCode === 'REUPLOAD_REQUIRED') statusScore = 5
+    else if (row.statusCode === 'REQUESTED') statusScore = 10
+    else if (row.statusCode === 'RECEIVED') statusScore = 15
+    else if (row.statusCode === 'UNDER_REVIEW') statusScore = 18
+    else if (row.expiryStatus === 'EXPIRED') statusScore = 20
+    else if (row.expiryStatus === 'EXPIRING') statusScore = 25
+    else if (row.statusCode === 'VERIFIED') statusScore = 80
+    else if (row.statusCode === 'ARCHIVED') statusScore = 90
+    return requiredBoost + statusScore
+  }
+  items.sort((a, b) => {
+    const diff = actionScore(a) - actionScore(b)
+    if (diff !== 0) return diff
+    return b.updated.localeCompare(a.updated)
+  })
+
   const total = items.length
-  return { items: items.slice((page - 1) * limit, page * limit), total, page, limit }
+  return {
+    items: items.slice((page - 1) * limit, page * limit),
+    total,
+    page,
+    limit,
+    summary,
+  }
 }
 
 export async function listRejectionReasons() {
