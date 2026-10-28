@@ -152,13 +152,11 @@ pipelineRouter.get('/documents', requirePermission('document:view'), async (req,
       limit: Number(req.query.limit) || 50,
     })
     res.json({
-      items: result.items.map((row) => ({
-        ...row,
-        updated: daysAgoLabel(new Date(row.updated)),
-      })),
+      items: result.items,
       total: result.total,
       page: result.page,
       limit: result.limit,
+      summary: result.summary,
     })
   } catch (error) {
     next(error)
