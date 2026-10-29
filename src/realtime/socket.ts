@@ -7,6 +7,7 @@ import { loadAuthFromToken, type AuthContext } from '../modules/auth/session.ser
 export const SOCKET_EVENTS = {
   notificationCreated: 'notification:created',
   emailInbound: 'email:inbound',
+  permissionsUpdated: 'permissions:updated',
 } as const
 
 const EMAIL_CHANNEL = 'channel:email'
@@ -17,6 +18,16 @@ export type EmailInboundPayload = {
   leadId: string | null
   fromEmail: string
   preview: string
+}
+
+export type PermissionsUpdatedPayload = {
+  reason: 'role_permissions_changed' | 'user_overrides_changed'
+  roleId?: string
+  roleName?: string
+  actorName?: string
+  grantedCount: number
+  revokedCount: number
+  message: string
 }
 
 export type NotificationCreatedPayload = {
@@ -129,6 +140,17 @@ export function emitToUser(userId: string, event: string, payload: unknown) {
 
 export function emitNotificationCreated(userId: string, payload: NotificationCreatedPayload) {
   emitToUser(userId, SOCKET_EVENTS.notificationCreated, payload)
+}
+
+/** Tell affected users to refresh session permissions (menu + route guards). */
+export function emitPermissionsUpdated(
+  userIds: string[],
+  payload: PermissionsUpdatedPayload,
+) {
+  const unique = [...new Set(userIds.filter(Boolean))]
+  for (const userId of unique) {
+    emitToUser(userId, SOCKET_EVENTS.permissionsUpdated, payload)
+  }
 }
 
 /** Live email thread refresh for users with communication:view. */

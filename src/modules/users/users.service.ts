@@ -11,7 +11,6 @@ import {
 } from "../../lib/xlsx-export";
 import {
   defaultScopesForRole,
-  isCriticalPermission,
   isPermissionGrantRole,
   permissionLabel,
   userDirectoryScope,
@@ -21,7 +20,8 @@ import { hashPassword } from "../auth/password";
 import { sendAccountInvite } from "../auth/password-reset.service";
 import type { AuthContext } from "../auth/session.service";
 import { revokeSession, revokeUserSessions } from "../auth/session.service";
-import { notifyCriticalPermissionChanges } from "../notifications/notifications.service";
+import { notifyPermissionChanges } from "../notifications/notifications.service";
+import { emitPermissionsUpdated } from "../../realtime/socket";
 import { readUserProfilePhoto, saveUserProfilePhoto } from "./users.storage";
 
 const userListInclude = {
@@ -1075,18 +1075,33 @@ export async function setUserOverrides(
     metadata: { overrides: nextRows },
   });
 
-  const criticalChanges = historyChanges.filter((change) =>
-    isCriticalPermission(change.resource, change.action),
-  );
-  if (criticalChanges.length > 0) {
-    await notifyCriticalPermissionChanges({
+  if (historyChanges.length > 0) {
+    const changes = historyChanges.map((change) => ({
+      label: permissionLabel(change.resource, change.action),
+      from: effectLabel(change.from),
+      to: effectLabel(change.to),
+    }));
+    const grantedCount = changes.filter((change) => change.to === "Allowed").length;
+    const revokedCount = changes.filter((change) => change.to === "Denied").length;
+    let message = "Your account permissions were updated.";
+    if (grantedCount > 0 && revokedCount === 0) {
+      message = "New permissions were granted on your account.";
+    } else if (revokedCount > 0 && grantedCount === 0) {
+      message = "Some permissions were withdrawn from your account.";
+    }
+
+    await notifyPermissionChanges({
       userIds: [userId],
       actorName: auth.user.fullName,
-      changes: criticalChanges.map((change) => ({
-        label: permissionLabel(change.resource, change.action),
-        from: effectLabel(change.from),
-        to: effectLabel(change.to),
-      })),
+      changes,
+    });
+
+    emitPermissionsUpdated([userId], {
+      reason: "user_overrides_changed",
+      actorName: auth.user.fullName,
+      grantedCount,
+      revokedCount,
+      message,
     });
   }
 

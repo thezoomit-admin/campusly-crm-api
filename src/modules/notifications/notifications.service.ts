@@ -345,7 +345,57 @@ export async function updateNotificationConfig(
   return { item: updated };
 }
 
-export async function notifyCriticalPermissionChanges(input: {
+function summarizePermissionLabels(
+  changes: Array<{ label: string; from: string; to: string }>,
+) {
+  const shown = changes.slice(0, 8).map((change) => change.label);
+  const extra =
+    changes.length > shown.length
+      ? ` and ${changes.length - shown.length} more`
+      : "";
+  return `${shown.join(", ")}${extra}`;
+}
+
+/** Always create in-app rows + socket push (do not depend on event-config toggles). */
+async function sendPermissionChangeNotice(input: {
+  userIds: string[];
+  title: string;
+  body: string;
+  kind: "granted" | "withdrawn";
+  roleName?: string;
+  count: number;
+}) {
+  const stamp = Date.now();
+  await Promise.all(
+    input.userIds.map((userId) =>
+      createNotification({
+        userId,
+        title: input.title,
+        body: input.body,
+        type: "permission_change",
+        eventType: "permission_change",
+        kind: "system",
+        priority: "Critical",
+        link: "/dashboard",
+        browser: true,
+        dedupeKey: `permission-change:${input.kind}:${userId}:${stamp}`,
+        payload: {
+          changeKind: input.kind,
+          count: input.count,
+          roleName: input.roleName || null,
+        },
+      }).catch((error) => {
+        console.error(
+          `[notifications] permission ${input.kind} failed for ${userId}:`,
+          error,
+        );
+        return undefined;
+      }),
+    ),
+  );
+}
+
+export async function notifyPermissionChanges(input: {
   userIds: string[];
   actorName: string;
   changes: Array<{ label: string; from: string; to: string }>;
@@ -354,36 +404,48 @@ export async function notifyCriticalPermissionChanges(input: {
   const userIds = [...new Set(input.userIds.filter(Boolean))];
   if (userIds.length === 0 || input.changes.length === 0) return;
 
-  const shown = input.changes.slice(0, 8);
-  const summary = shown.map((change) => `${change.label} changed from ${change.from} to ${change.to}`).join("; ");
-  const extra = input.changes.length > shown.length ? ` and ${input.changes.length - shown.length} more` : "";
-  const body = input.roleName
-    ? `${input.actorName} changed the ${input.roleName} role: ${summary}${extra}.`
-    : `${input.actorName} changed your permissions: ${summary}${extra}.`;
+  const granted = input.changes.filter(
+    (change) =>
+      change.to === "Allowed" ||
+      (change.from === "Denied" && change.to === "Role default"),
+  );
+  const revoked = input.changes.filter(
+    (change) =>
+      change.to === "Denied" ||
+      (change.from === "Allowed" && change.to === "Role default"),
+  );
 
-  await dispatchCrmEvent({
-    eventType: "permission_change",
-    dedupeKey: `permission-change:${userIds.slice().sort().join(",")}:${summary.slice(0, 80)}`,
-    title: "Security / Permission Alert",
-    body,
-    explicitUserIds: userIds,
-    kind: "system",
-    link: "/roles",
-  }).catch(async (error) => {
-    console.error("Failed to send permission notification", error);
-    await Promise.all(
-      userIds.map((userId) =>
-        createNotification({
-          userId,
-          title: "Security / Permission Alert",
-          body,
-          type: "permission_change",
-          eventType: "permission_change",
-          priority: "Critical",
-          link: "/roles",
-        }).catch(() => undefined),
-      ),
-    );
-  });
+  if (granted.length > 0) {
+    const summary = summarizePermissionLabels(granted);
+    const body = input.roleName
+      ? `${input.actorName} granted new permissions on the ${input.roleName} role: ${summary}.`
+      : `${input.actorName} granted you new permissions: ${summary}.`;
+    await sendPermissionChangeNotice({
+      userIds,
+      title: "Permissions granted",
+      body,
+      kind: "granted",
+      roleName: input.roleName,
+      count: granted.length,
+    });
+  }
+
+  if (revoked.length > 0) {
+    const summary = summarizePermissionLabels(revoked);
+    const body = input.roleName
+      ? `${input.actorName} withdrew permissions from the ${input.roleName} role: ${summary}.`
+      : `${input.actorName} withdrew permissions from your account: ${summary}.`;
+    await sendPermissionChangeNotice({
+      userIds,
+      title: "Permissions withdrawn",
+      body,
+      kind: "withdrawn",
+      roleName: input.roleName,
+      count: revoked.length,
+    });
+  }
 }
+
+/** @deprecated Use notifyPermissionChanges — kept for older call sites. */
+export const notifyCriticalPermissionChanges = notifyPermissionChanges;
 
