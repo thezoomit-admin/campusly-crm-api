@@ -2319,7 +2319,7 @@ export const MASTER_DATA_SEEDS: MasterDataSeed[] = [
   },
   {
     categoryKey: "DOCUMENT_TYPE",
-    name: "CV",
+    name: "Professional CV",
     code: "CV_PROFESSIONAL",
     sortOrder: 60,
     parentCode: "PROFESSIONAL",

@@ -262,8 +262,8 @@ export const NOTIFICATION_EVENTS: NotificationEventDefinition[] = [
   },
   {
     eventType: "permission_change",
-    label: "Security / Permission Alert",
-    description: "Sent when critical permissions change.",
+    label: "Permission change",
+    description: "Sent when role or user permissions are granted or withdrawn.",
     enabled: true,
     mandatory: true,
     priority: "Critical",

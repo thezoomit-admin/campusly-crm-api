@@ -2,9 +2,10 @@ import type { Prisma, RecordStatus } from "../../lib/prisma-client";
 import { writeAuditLog } from "../../lib/audit";
 import { httpError } from "../../lib/http-error";
 import { prisma } from "../../lib/prisma";
-import { isCriticalPermission, isPermissionGrantRole, permissionLabel } from "../auth/access";
+import { isPermissionGrantRole, permissionLabel } from "../auth/access";
 import { revokeUserSessions, type AuthContext } from "../auth/session.service";
-import { notifyCriticalPermissionChanges } from "../notifications/notifications.service";
+import { notifyPermissionChanges } from "../notifications/notifications.service";
+import { emitPermissionsUpdated } from "../../realtime/socket";
 
 function slugify(value: string) {
   return value
@@ -341,22 +342,20 @@ export async function setRolePermissions(
   const revoked = [...previous.entries()].filter(
     ([permissionId]) => !nextIds.has(permissionId),
   );
-  const criticalChanges: Array<{ label: string; from: string; to: string }> =
+  const permissionChanges: Array<{ label: string; from: string; to: string }> =
     [];
 
   for (const permission of granted) {
-    if (isCriticalPermission(permission.resource, permission.action)) {
-      criticalChanges.push({
-        label: permissionLabel(permission.resource, permission.action),
-        from: "Denied",
-        to: "Allowed",
-      });
-    }
+    permissionChanges.push({
+      label: permissionLabel(permission.resource, permission.action),
+      from: "Denied",
+      to: "Allowed",
+    });
   }
   for (const [, key] of revoked) {
     const [resource, action] = key.split(":");
-    if (resource && action && isCriticalPermission(resource, action)) {
-      criticalChanges.push({
+    if (resource && action) {
+      permissionChanges.push({
         label: permissionLabel(resource, action),
         from: "Allowed",
         to: "Denied",
@@ -408,16 +407,40 @@ export async function setRolePermissions(
     metadata: { permissionCount: permissions.length },
   });
 
-  if (criticalChanges.length > 0) {
+  if (permissionChanges.length > 0) {
     const members = await prisma.user.findMany({
-      where: { primaryRoleId: id, NOT: { id: auth.user.id } },
+      where: { primaryRoleId: id, status: "ACTIVE" },
       select: { id: true },
     });
-    await notifyCriticalPermissionChanges({
-      userIds: members.map((member) => member.id),
+    // Role members + the saver (CEO editing own role, or admin confirming a change).
+    const memberIds = [
+      ...new Set([...members.map((member) => member.id), auth.user.id]),
+    ];
+    const grantedCount = granted.length;
+    const revokedCount = revoked.length;
+    let message = `Your ${role.name} role permissions were updated.`;
+    if (grantedCount > 0 && revokedCount === 0) {
+      message = `New permissions were granted on the ${role.name} role.`;
+    } else if (revokedCount > 0 && grantedCount === 0) {
+      message = `Some permissions were withdrawn from the ${role.name} role.`;
+    }
+
+    // Create in-app notifications first (await socket push), then refresh clients.
+    await notifyPermissionChanges({
+      userIds: memberIds,
       actorName: auth.user.fullName,
       roleName: role.name,
-      changes: criticalChanges,
+      changes: permissionChanges,
+    });
+
+    emitPermissionsUpdated(memberIds, {
+      reason: "role_permissions_changed",
+      roleId: id,
+      roleName: role.name,
+      actorName: auth.user.fullName,
+      grantedCount,
+      revokedCount,
+      message,
     });
   }
 

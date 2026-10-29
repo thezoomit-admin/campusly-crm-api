@@ -140,6 +140,10 @@ export async function login(input: LoginInput) {
   }
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
+    const remainingMinutes = Math.max(
+      1,
+      Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60_000),
+    )
     queueAuditLog({
       userId: user.id,
       action: 'LOGIN_DENIED',
@@ -152,7 +156,10 @@ export async function login(input: LoginInput) {
     return {
       ok: false as const,
       status: 403,
-      body: { error: 'Account is locked. Try again later.', code: 'ACCOUNT_LOCKED' },
+      body: {
+        error: `Account is locked. Try again later after ${remainingMinutes} min.`,
+        code: 'ACCOUNT_LOCKED',
+      },
     }
   }
 

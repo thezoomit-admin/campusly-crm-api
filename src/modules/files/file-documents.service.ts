@@ -1,229 +1,437 @@
-import type { FileDocumentStatus, Prisma } from '../../lib/prisma-client'
-import { writeAuditLog } from '../../lib/audit'
-import { HttpError, httpError } from '../../lib/http-error'
-import { prisma } from '../../lib/prisma'
-import { hasPermission } from '../auth/access'
-import type { AuthContext } from '../auth/session.service'
-import { isEmailConfigured, isEmailMockMode, sendMailboxEmail } from '../email/email.client'
-import { createNotification } from '../notifications/notifications.service'
-import { assertCanViewLead, asString, leadScopeWhere } from '../leads/leads.helpers'
-import { isMockMode as isWhatsAppMock, isWhatsAppConfigured, sendWhatsApp } from '../whatsapp/whatsapp.client'
-import { readFileDocumentAsset, saveFileDocumentAsset } from './file-documents.storage'
+import type { FileDocumentStatus, Prisma } from "../../lib/prisma-client";
+import { writeAuditLog } from "../../lib/audit";
+import { HttpError, httpError } from "../../lib/http-error";
+import { prisma } from "../../lib/prisma";
+import { hasPermission } from "../auth/access";
+import type { AuthContext } from "../auth/session.service";
+import {
+  isEmailConfigured,
+  isEmailMockMode,
+  sendMailboxEmail,
+} from "../email/email.client";
+import { createNotification } from "../notifications/notifications.service";
+import {
+  assertCanViewLead,
+  asString,
+  leadScopeWhere,
+} from "../leads/leads.helpers";
+import {
+  isMockMode as isWhatsAppMock,
+  isWhatsAppConfigured,
+  sendWhatsApp,
+} from "../whatsapp/whatsapp.client";
+import {
+  readFileDocumentAsset,
+  saveFileDocumentAsset,
+} from "./file-documents.storage";
 
-const SENSITIVE_TYPES = new Set(['PASSPORT', 'NID', 'BANK_STATEMENT', 'SPONSOR', 'FINANCIAL_CERTIFICATE'])
-const APPLICATION_TYPES = new Set(['SOP', 'CV', 'RECOMMENDATION', 'APPLICATION_FORM', 'OFFER'])
-const REQUEST_METHODS = new Set(['WHATSAPP', 'EMAIL', 'PHONE', 'IN_PERSON', 'OTHER'])
+const SENSITIVE_TYPES = new Set([
+  "PASSPORT",
+  "NID",
+  "BANK_STATEMENT",
+  "SPONSOR",
+  "FINANCIAL_CERTIFICATE",
+]);
+const APPLICATION_TYPES = new Set([
+  "SOP",
+  "CV",
+  "RECOMMENDATION",
+  "APPLICATION_FORM",
+  "OFFER",
+]);
+const REQUEST_METHODS = new Set([
+  "WHATSAPP",
+  "EMAIL",
+  "PHONE",
+  "IN_PERSON",
+  "OTHER",
+]);
 
 const FILE_TEMPLATE: Array<{
-  categoryCode: string
-  categoryName: string
-  typeCode: string
-  typeName: string
-  isRequired: boolean
-  isSensitive: boolean
-  sortOrder: number
+  categoryCode: string;
+  categoryName: string;
+  typeCode: string;
+  typeName: string;
+  isRequired: boolean;
+  isSensitive: boolean;
+  sortOrder: number;
 }> = [
-  { categoryCode: 'PERSONAL', categoryName: 'Personal', typeCode: 'PASSPORT', typeName: 'Passport', isRequired: true, isSensitive: true, sortOrder: 1 },
-  { categoryCode: 'PERSONAL', categoryName: 'Personal', typeCode: 'PHOTOGRAPH', typeName: 'Photograph', isRequired: true, isSensitive: false, sortOrder: 2 },
-  { categoryCode: 'ACADEMIC', categoryName: 'Academic', typeCode: 'ACADEMIC_CERTIFICATE', typeName: 'Academic Certificate', isRequired: true, isSensitive: false, sortOrder: 3 },
-  { categoryCode: 'ACADEMIC', categoryName: 'Academic', typeCode: 'TRANSCRIPT', typeName: 'Academic Transcript', isRequired: true, isSensitive: false, sortOrder: 4 },
-  { categoryCode: 'PROFESSIONAL', categoryName: 'Professional', typeCode: 'CV_PROFESSIONAL', typeName: 'CV', isRequired: false, isSensitive: false, sortOrder: 5 },
-  { categoryCode: 'LANGUAGE', categoryName: 'Language', typeCode: 'IELTS', typeName: 'English Test Result', isRequired: false, isSensitive: false, sortOrder: 6 },
-]
+  {
+    categoryCode: "PERSONAL",
+    categoryName: "Personal",
+    typeCode: "PASSPORT",
+    typeName: "Passport",
+    isRequired: true,
+    isSensitive: true,
+    sortOrder: 1,
+  },
+  {
+    categoryCode: "PERSONAL",
+    categoryName: "Personal",
+    typeCode: "PHOTOGRAPH",
+    typeName: "Photograph",
+    isRequired: true,
+    isSensitive: false,
+    sortOrder: 2,
+  },
+  {
+    categoryCode: "ACADEMIC",
+    categoryName: "Academic",
+    typeCode: "ACADEMIC_CERTIFICATE",
+    typeName: "Academic Certificate",
+    isRequired: true,
+    isSensitive: false,
+    sortOrder: 3,
+  },
+  {
+    categoryCode: "ACADEMIC",
+    categoryName: "Academic",
+    typeCode: "TRANSCRIPT",
+    typeName: "Academic Transcript",
+    isRequired: true,
+    isSensitive: false,
+    sortOrder: 4,
+  },
+  {
+    categoryCode: "PROFESSIONAL",
+    categoryName: "Professional",
+    typeCode: "CV_PROFESSIONAL",
+    typeName: "CV",
+    isRequired: false,
+    isSensitive: false,
+    sortOrder: 5,
+  },
+  {
+    categoryCode: "LANGUAGE",
+    categoryName: "Language",
+    typeCode: "IELTS",
+    typeName: "English Test Result",
+    isRequired: false,
+    isSensitive: false,
+    sortOrder: 6,
+  },
+];
 
-const MASTER_ENSURE: Array<{ categoryKey: string; name: string; code: string; sortOrder: number; parentCode?: string }> = [
-  { categoryKey: 'DOCUMENT_CATEGORY', name: 'Professional', code: 'PROFESSIONAL', sortOrder: 6 },
-  { categoryKey: 'DOCUMENT_TYPE', name: 'Academic Certificate', code: 'ACADEMIC_CERTIFICATE', sortOrder: 21, parentCode: 'ACADEMIC' },
-  { categoryKey: 'DOCUMENT_TYPE', name: 'CV', code: 'CV_PROFESSIONAL', sortOrder: 60, parentCode: 'PROFESSIONAL' },
-  { categoryKey: 'DOCUMENT_TYPE', name: 'Experience Certificate', code: 'EXPERIENCE_CERTIFICATE', sortOrder: 61, parentCode: 'PROFESSIONAL' },
-  { categoryKey: 'REJECTION_REASON', name: 'Blurry', code: 'BLURRY', sortOrder: 6 },
-  { categoryKey: 'REJECTION_REASON', name: 'Wrong Document', code: 'WRONG_DOCUMENT', sortOrder: 7 },
-  { categoryKey: 'REJECTION_REASON', name: 'Incorrect Information', code: 'INCORRECT_INFORMATION', sortOrder: 8 },
-  { categoryKey: 'REJECTION_REASON', name: 'Missing Page', code: 'MISSING_PAGE', sortOrder: 9 },
-  { categoryKey: 'REJECTION_REASON', name: 'Invalid Copy', code: 'INVALID_COPY', sortOrder: 10 },
-  { categoryKey: 'REJECTION_REASON', name: 'Other', code: 'OTHER', sortOrder: 11 },
-  { categoryKey: 'DOCUMENT_REQUEST_METHOD', name: 'WhatsApp', code: 'WHATSAPP', sortOrder: 1 },
-  { categoryKey: 'DOCUMENT_REQUEST_METHOD', name: 'Email', code: 'EMAIL', sortOrder: 2 },
-  { categoryKey: 'DOCUMENT_REQUEST_METHOD', name: 'Phone', code: 'PHONE', sortOrder: 3 },
-  { categoryKey: 'DOCUMENT_REQUEST_METHOD', name: 'In Person', code: 'IN_PERSON', sortOrder: 4 },
-  { categoryKey: 'DOCUMENT_REQUEST_METHOD', name: 'Other', code: 'OTHER', sortOrder: 5 },
-]
+const MASTER_ENSURE: Array<{
+  categoryKey: string;
+  name: string;
+  code: string;
+  sortOrder: number;
+  parentCode?: string;
+}> = [
+  {
+    categoryKey: "DOCUMENT_CATEGORY",
+    name: "Professional",
+    code: "PROFESSIONAL",
+    sortOrder: 6,
+  },
+  {
+    categoryKey: "DOCUMENT_TYPE",
+    name: "Academic Certificate",
+    code: "ACADEMIC_CERTIFICATE",
+    sortOrder: 21,
+    parentCode: "ACADEMIC",
+  },
+  {
+    categoryKey: "DOCUMENT_TYPE",
+    name: "Professional CV",
+    code: "CV_PROFESSIONAL",
+    sortOrder: 60,
+    parentCode: "PROFESSIONAL",
+  },
+  {
+    categoryKey: "DOCUMENT_TYPE",
+    name: "Experience Certificate",
+    code: "EXPERIENCE_CERTIFICATE",
+    sortOrder: 61,
+    parentCode: "PROFESSIONAL",
+  },
+  {
+    categoryKey: "REJECTION_REASON",
+    name: "Blurry",
+    code: "BLURRY",
+    sortOrder: 6,
+  },
+  {
+    categoryKey: "REJECTION_REASON",
+    name: "Wrong Document",
+    code: "WRONG_DOCUMENT",
+    sortOrder: 7,
+  },
+  {
+    categoryKey: "REJECTION_REASON",
+    name: "Incorrect Information",
+    code: "INCORRECT_INFORMATION",
+    sortOrder: 8,
+  },
+  {
+    categoryKey: "REJECTION_REASON",
+    name: "Missing Page",
+    code: "MISSING_PAGE",
+    sortOrder: 9,
+  },
+  {
+    categoryKey: "REJECTION_REASON",
+    name: "Invalid Copy",
+    code: "INVALID_COPY",
+    sortOrder: 10,
+  },
+  {
+    categoryKey: "REJECTION_REASON",
+    name: "Other",
+    code: "OTHER",
+    sortOrder: 11,
+  },
+  {
+    categoryKey: "DOCUMENT_REQUEST_METHOD",
+    name: "WhatsApp",
+    code: "WHATSAPP",
+    sortOrder: 1,
+  },
+  {
+    categoryKey: "DOCUMENT_REQUEST_METHOD",
+    name: "Email",
+    code: "EMAIL",
+    sortOrder: 2,
+  },
+  {
+    categoryKey: "DOCUMENT_REQUEST_METHOD",
+    name: "Phone",
+    code: "PHONE",
+    sortOrder: 3,
+  },
+  {
+    categoryKey: "DOCUMENT_REQUEST_METHOD",
+    name: "In Person",
+    code: "IN_PERSON",
+    sortOrder: 4,
+  },
+  {
+    categoryKey: "DOCUMENT_REQUEST_METHOD",
+    name: "Other",
+    code: "OTHER",
+    sortOrder: 5,
+  },
+];
 
-type AuditMeta = { ipAddress?: string; userAgent?: string }
-type UploadMode = 'create' | 'additional' | 'reupload'
+type AuditMeta = { ipAddress?: string; userAgent?: string };
+type UploadMode = "create" | "additional" | "reupload";
 
 const VERSION_INCLUDE = {
-  assets: { orderBy: { createdAt: 'asc' as const } },
+  assets: { orderBy: { createdAt: "asc" as const } },
   uploadedBy: { select: { id: true, fullName: true } },
   verifiedBy: { select: { id: true, fullName: true } },
-} satisfies Prisma.FileDocumentVersionInclude
+} satisfies Prisma.FileDocumentVersionInclude;
 
 function statusLabel(status: string) {
   switch (status) {
-    case 'NOT_REQUESTED':
-      return 'Not Requested'
-    case 'REQUESTED':
-      return 'Requested'
-    case 'RECEIVED':
-      return 'Received'
-    case 'UNDER_REVIEW':
-      return 'Under Review'
-    case 'VERIFIED':
-      return 'Verified'
-    case 'REJECTED':
-      return 'Rejected'
-    case 'REUPLOAD_REQUIRED':
-      return 'Re-upload Required'
-    case 'ARCHIVED':
-      return 'Archived'
+    case "NOT_REQUESTED":
+      return "Not Requested";
+    case "REQUESTED":
+      return "Requested";
+    case "RECEIVED":
+      return "Received";
+    case "UNDER_REVIEW":
+      return "Under Review";
+    case "VERIFIED":
+      return "Verified";
+    case "REJECTED":
+      return "Rejected";
+    case "REUPLOAD_REQUIRED":
+      return "Re-upload Required";
+    case "ARCHIVED":
+      return "Archived";
     default:
-      return status
+      return status;
   }
 }
 
 function reminderDays() {
-  return Math.max(1, Number(process.env.DOCUMENT_EXPIRY_REMINDER_DAYS || 30) || 30)
+  return Math.max(
+    1,
+    Number(process.env.DOCUMENT_EXPIRY_REMINDER_DAYS || 30) || 30,
+  );
 }
 
 function startOfToday() {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return today
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
 }
 
 function expiryState(expiryDate: Date | null | undefined) {
-  if (!expiryDate) return 'NONE' as const
-  const today = startOfToday()
-  const expiry = new Date(expiryDate)
-  expiry.setHours(0, 0, 0, 0)
-  if (expiry < today) return 'EXPIRED' as const
-  const soon = new Date(today)
-  soon.setDate(soon.getDate() + reminderDays())
-  if (expiry <= soon) return 'EXPIRING' as const
-  return 'VALID' as const
+  if (!expiryDate) return "NONE" as const;
+  const today = startOfToday();
+  const expiry = new Date(expiryDate);
+  expiry.setHours(0, 0, 0, 0);
+  if (expiry < today) return "EXPIRED" as const;
+  const soon = new Date(today);
+  soon.setDate(soon.getDate() + reminderDays());
+  if (expiry <= soon) return "EXPIRING" as const;
+  return "VALID" as const;
 }
 
 function parseOptionalDate(value: unknown, field: string) {
-  const raw = asString(value)
-  if (!raw) return null
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
+  const raw = asString(value);
+  if (!raw) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
   const date = match
-    ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])))
-    : new Date(raw)
+    ? new Date(
+        Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+      )
+    : new Date(raw);
   if (Number.isNaN(date.getTime())) {
-    throw httpError.validation({ [field]: 'Valid date is required.' })
+    throw httpError.validation({ [field]: "Valid date is required." });
   }
-  return date
+  return date;
 }
 
 function canAccessSensitive(auth: AuthContext) {
   return (
-    hasPermission(auth.permissions, 'document:sensitive') ||
-    hasPermission(auth.permissions, 'document:verify') ||
-    auth.roles.some((role) => role.toLowerCase() === 'admin')
-  )
+    hasPermission(auth.permissions, "document:sensitive") ||
+    hasPermission(auth.permissions, "document:verify") ||
+    auth.roles.some((role) => role.toLowerCase() === "admin")
+  );
 }
 
 function assertView(auth: AuthContext) {
-  if (!hasPermission(auth.permissions, 'document:view') && !hasPermission(auth.permissions, 'lead:view')) {
-    throw httpError.accessDenied('You are not authorized to access this document.')
+  if (
+    !hasPermission(auth.permissions, "document:view") &&
+    !hasPermission(auth.permissions, "lead:view")
+  ) {
+    throw httpError.accessDenied(
+      "You are not authorized to access this document.",
+    );
   }
 }
 
 function assertUpload(auth: AuthContext) {
-  if (!hasPermission(auth.permissions, 'document:upload')) {
-    throw httpError.accessDenied('You are not authorized to access this document.')
+  if (!hasPermission(auth.permissions, "document:upload")) {
+    throw httpError.accessDenied(
+      "You are not authorized to access this document.",
+    );
   }
 }
 
 function assertVerify(auth: AuthContext) {
-  if (!hasPermission(auth.permissions, 'document:verify')) {
-    throw httpError.accessDenied('You are not authorized to access this document.')
+  if (!hasPermission(auth.permissions, "document:verify")) {
+    throw httpError.accessDenied(
+      "You are not authorized to access this document.",
+    );
   }
 }
 
 function assertDownload(auth: AuthContext) {
   if (
-    !hasPermission(auth.permissions, 'document:download') &&
-    !hasPermission(auth.permissions, 'document:view') &&
-    !hasPermission(auth.permissions, 'document:upload')
+    !hasPermission(auth.permissions, "document:download") &&
+    !hasPermission(auth.permissions, "document:view") &&
+    !hasPermission(auth.permissions, "document:upload")
   ) {
-    throw httpError.accessDenied('You are not authorized to access this document.')
+    throw httpError.accessDenied(
+      "You are not authorized to access this document.",
+    );
   }
 }
 
 function assertManage(auth: AuthContext) {
-  if (!hasPermission(auth.permissions, 'document:delete') && !auth.roles.some((role) => role.toLowerCase() === 'admin')) {
-    throw httpError.accessDenied('You are not authorized to access this document.')
+  if (
+    !hasPermission(auth.permissions, "document:delete") &&
+    !auth.roles.some((role) => role.toLowerCase() === "admin")
+  ) {
+    throw httpError.accessDenied(
+      "You are not authorized to access this document.",
+    );
   }
 }
 
-async function nextCode(tx: Prisma.TransactionClient, key: string, prefix: string) {
+async function nextCode(
+  tx: Prisma.TransactionClient,
+  key: string,
+  prefix: string,
+) {
   const row = await tx.documentSequence.upsert({
     where: { key },
     create: { key, nextValue: 2 },
     update: { nextValue: { increment: 1 } },
-  })
-  return `${prefix}-${String(row.nextValue - 1).padStart(6, '0')}`
+  });
+  return `${prefix}-${String(row.nextValue - 1).padStart(6, "0")}`;
 }
 
-async function isFileOpenedLead(lead: { id?: string; statusCode: string | null; status: string }) {
-  if ((lead.statusCode || '').toUpperCase() === 'FILE_OPENED') return true
-  if (!lead.statusCode && lead.status.trim().toLowerCase() === 'file opened') return true
-  const code = (lead.statusCode || '').toUpperCase()
-  if (code === 'CONVERTED' || code === 'FILE_OPENING_PENDING') return true
-  const name = lead.status.trim().toLowerCase()
-  if (name === 'converted' || name === 'file opening pending') return true
+async function isFileOpenedLead(lead: {
+  id?: string;
+  statusCode: string | null;
+  status: string;
+}) {
+  if ((lead.statusCode || "").toUpperCase() === "FILE_OPENED") return true;
+  if (!lead.statusCode && lead.status.trim().toLowerCase() === "file opened")
+    return true;
+  const code = (lead.statusCode || "").toUpperCase();
+  if (code === "CONVERTED" || code === "FILE_OPENING_PENDING") return true;
+  const name = lead.status.trim().toLowerCase();
+  if (name === "converted" || name === "file opening pending") return true;
   if (lead.id) {
     const [hasFile, hasApplication] = await Promise.all([
-      prisma.crmFile.findUnique({ where: { leadId: lead.id }, select: { id: true } }),
-      prisma.application.findFirst({ where: { leadId: lead.id }, select: { id: true } }),
-    ])
-    if (hasFile || hasApplication) return true
+      prisma.crmFile.findUnique({
+        where: { leadId: lead.id },
+        select: { id: true },
+      }),
+      prisma.application.findFirst({
+        where: { leadId: lead.id },
+        select: { id: true },
+      }),
+    ]);
+    if (hasFile || hasApplication) return true;
   }
-  if (!lead.statusCode) return false
+  if (!lead.statusCode) return false;
   const item = await prisma.masterDataItem.findFirst({
-    where: { categoryKey: 'LEAD_STATUS', code: lead.statusCode },
+    where: { categoryKey: "LEAD_STATUS", code: lead.statusCode },
     select: { behaviorKey: true },
-  })
+  });
   return (
-    item?.behaviorKey === 'file_opened' ||
-    item?.behaviorKey === 'converted' ||
-    item?.behaviorKey === 'file_opening_pending'
-  )
+    item?.behaviorKey === "file_opened" ||
+    item?.behaviorKey === "converted" ||
+    item?.behaviorKey === "file_opening_pending"
+  );
 }
 
 export async function ensureFileDocumentSetup() {
-  const ruleCount = await prisma.documentChecklistRule.count({ where: { stage: 'FILE' } })
+  const ruleCount = await prisma.documentChecklistRule.count({
+    where: { stage: "FILE" },
+  });
   if (ruleCount === 0) {
     await prisma.documentChecklistRule.createMany({
       data: FILE_TEMPLATE.map((row) => ({
         categoryCode: row.categoryCode,
         typeCode: row.typeCode,
         name: row.typeName,
-        stage: 'FILE' as const,
+        stage: "FILE" as const,
         isRequired: row.isRequired,
         isSensitive: row.isSensitive,
         sortOrder: row.sortOrder,
         isActive: true,
       })),
-    })
+    });
   }
 
   for (const item of MASTER_ENSURE) {
     const parent = item.parentCode
       ? await prisma.masterDataItem.findFirst({
           where: {
-            categoryKey: item.categoryKey === 'DOCUMENT_TYPE' ? 'DOCUMENT_CATEGORY' : undefined,
+            categoryKey:
+              item.categoryKey === "DOCUMENT_TYPE"
+                ? "DOCUMENT_CATEGORY"
+                : undefined,
             code: item.parentCode,
           },
           select: { id: true },
         })
-      : null
-    if (item.parentCode && !parent) continue
+      : null;
+    if (item.parentCode && !parent) continue;
     await prisma.masterDataItem.upsert({
-      where: { categoryKey_code: { categoryKey: item.categoryKey, code: item.code } },
-      update: { status: 'ACTIVE' },
+      where: {
+        categoryKey_code: { categoryKey: item.categoryKey, code: item.code },
+      },
+      update: { status: "ACTIVE" },
       create: {
         categoryKey: item.categoryKey,
         name: item.name,
@@ -231,21 +439,23 @@ export async function ensureFileDocumentSetup() {
         code: item.code,
         sortOrder: item.sortOrder,
         parentId: parent?.id ?? null,
-        status: 'ACTIVE',
+        status: "ACTIVE",
       },
-    })
+    });
   }
 }
 
 async function loadTemplate() {
-  await ensureFileDocumentSetup()
+  await ensureFileDocumentSetup();
   const rules = await prisma.documentChecklistRule.findMany({
-    where: { stage: 'FILE', isActive: true },
-    orderBy: { sortOrder: 'asc' },
-  })
-  if (rules.length === 0) return FILE_TEMPLATE
+    where: { stage: "FILE", isActive: true },
+    orderBy: { sortOrder: "asc" },
+  });
+  if (rules.length === 0) return FILE_TEMPLATE;
   return rules.map((rule) => {
-    const fallback = FILE_TEMPLATE.find((row) => row.typeCode === rule.typeCode)
+    const fallback = FILE_TEMPLATE.find(
+      (row) => row.typeCode === rule.typeCode,
+    );
     return {
       categoryCode: rule.categoryCode,
       categoryName: fallback?.categoryName || rule.categoryCode,
@@ -254,16 +464,16 @@ async function loadTemplate() {
       isRequired: rule.isRequired,
       isSensitive: rule.isSensitive,
       sortOrder: rule.sortOrder,
-    }
-  })
+    };
+  });
 }
 
 async function recordActivity(input: {
-  documentId: string
-  action: Prisma.FileDocumentActivityCreateInput['action']
-  userId?: string | null
-  notes?: string | null
-  metadata?: Prisma.InputJsonValue
+  documentId: string;
+  action: Prisma.FileDocumentActivityCreateInput["action"];
+  userId?: string | null;
+  notes?: string | null;
+  metadata?: Prisma.InputJsonValue;
 }) {
   await prisma.fileDocumentActivity.create({
     data: {
@@ -273,18 +483,18 @@ async function recordActivity(input: {
       notes: input.notes || null,
       metadata: input.metadata,
     },
-  })
+  });
 }
 
 async function recordLeadTimeline(input: {
-  leadId: string
-  leadName: string
-  userId: string
-  type: 'DOCUMENT_REQUEST' | 'OTHER'
-  notes: string
-  meta?: AuditMeta
-  metadata?: Prisma.InputJsonValue
-  outcome?: string
+  leadId: string;
+  leadName: string;
+  userId: string;
+  type: "DOCUMENT_REQUEST" | "OTHER";
+  notes: string;
+  meta?: AuditMeta;
+  metadata?: Prisma.InputJsonValue;
+  outcome?: string;
 }) {
   await prisma.activity.create({
     data: {
@@ -292,66 +502,88 @@ async function recordLeadTimeline(input: {
       userId: input.userId,
       notes: input.notes,
       relatedName: input.leadName,
-      relatedType: 'lead',
+      relatedType: "lead",
       relatedId: input.leadId,
-      outcome: input.outcome || 'Document',
+      outcome: input.outcome || "Document",
       metadata: input.metadata,
       ipAddress: input.meta?.ipAddress,
       userAgent: input.meta?.userAgent,
     },
-  })
+  });
 }
 
-function latestVersion<T extends { isLatest: boolean; versionNumber: number; expiryDate: Date | null }>(versions: T[]) {
-  return versions.find((row) => row.isLatest) || versions[0] || null
+function latestVersion<
+  T extends {
+    isLatest: boolean;
+    versionNumber: number;
+    expiryDate: Date | null;
+  },
+>(versions: T[]) {
+  return versions.find((row) => row.isLatest) || versions[0] || null;
 }
 
 function isVersionExpired(version: { expiryDate: Date | null } | null) {
-  return expiryState(version?.expiryDate) === 'EXPIRED'
+  return expiryState(version?.expiryDate) === "EXPIRED";
 }
 
 async function refreshReadiness(fileId: string) {
   const [items, documents] = await Promise.all([
-    prisma.fileChecklistItem.findMany({ where: { fileId, isActive: true, isRequired: true } }),
+    prisma.fileChecklistItem.findMany({
+      where: { fileId, isActive: true, isRequired: true },
+    }),
     prisma.fileDocument.findMany({
       where: { fileId, archivedAt: null },
       include: { versions: { where: { isLatest: true }, take: 1 } },
     }),
-  ])
-  const byType = new Map(documents.map((doc) => [doc.typeCode, doc]))
-  let verified = 0
+  ]);
+  const byType = new Map(documents.map((doc) => [doc.typeCode, doc]));
+  let verified = 0;
   for (const item of items) {
-    const doc = byType.get(item.typeCode)
-    const version = doc?.versions[0] || null
-    if (doc?.status === 'VERIFIED' && !isVersionExpired(version)) verified += 1
+    const doc = byType.get(item.typeCode);
+    const version = doc?.versions[0] || null;
+    if (doc?.status === "VERIFIED" && !isVersionExpired(version)) verified += 1;
   }
-  const total = items.length
-  const complete = total === 0 || verified === total
+  const total = items.length;
+  const complete = total === 0 || verified === total;
   await prisma.crmFile.update({
     where: { id: fileId },
-    data: { documentReadiness: complete ? 'COMPLETE' : 'INCOMPLETE' },
-  })
-  return { verified, total, percent: total === 0 ? 100 : Math.round((verified / total) * 100) }
+    data: { documentReadiness: complete ? "COMPLETE" : "INCOMPLETE" },
+  });
+  return {
+    verified,
+    total,
+    percent: total === 0 ? 100 : Math.round((verified / total) * 100),
+  };
 }
 
-type VersionRow = Prisma.FileDocumentVersionGetPayload<{ include: typeof VERSION_INCLUDE }>
+type VersionRow = Prisma.FileDocumentVersionGetPayload<{
+  include: typeof VERSION_INCLUDE;
+}>;
 
 function serializeVersion(version: VersionRow) {
   return {
     id: version.id,
     versionNumber: version.versionNumber,
     isLatest: version.isLatest,
-    documentDate: version.documentDate ? version.documentDate.toISOString().slice(0, 10) : null,
-    expiryDate: version.expiryDate ? version.expiryDate.toISOString().slice(0, 10) : null,
+    documentDate: version.documentDate
+      ? version.documentDate.toISOString().slice(0, 10)
+      : null,
+    expiryDate: version.expiryDate
+      ? version.expiryDate.toISOString().slice(0, 10)
+      : null,
     expiryStatus: expiryState(version.expiryDate),
     remarks: version.remarks,
     rejectionReasonCode: version.rejectionReasonCode,
     rejectionReasonName: version.rejectionReasonName,
     rejectionRemarks: version.rejectionRemarks,
-    verifiedBy: version.verifiedBy ? { id: version.verifiedBy.id, name: version.verifiedBy.fullName } : null,
+    verifiedBy: version.verifiedBy
+      ? { id: version.verifiedBy.id, name: version.verifiedBy.fullName }
+      : null,
     verifiedAt: version.verifiedAt?.toISOString() || null,
     verificationRemarks: version.verificationRemarks,
-    uploadedBy: version.uploadedBy ? { id: version.uploadedBy.id, name: version.uploadedBy.fullName } : null,
+    uploadedBy: version.uploadedBy
+      ? { id: version.uploadedBy.id, name: version.uploadedBy.fullName }
+      : null,
     uploadedByKind: version.uploadedByKind,
     uploadedAt: version.createdAt.toISOString(),
     assets: version.assets.map((asset) => ({
@@ -363,26 +595,31 @@ function serializeVersion(version: VersionRow) {
       isPrimary: asset.isPrimary,
       createdAt: asset.createdAt.toISOString(),
     })),
-  }
+  };
 }
 
 const DOCUMENT_INCLUDE = {
-  versions: { orderBy: { versionNumber: 'desc' as const }, include: VERSION_INCLUDE },
+  versions: {
+    orderBy: { versionNumber: "desc" as const },
+    include: VERSION_INCLUDE,
+  },
   requests: {
-    orderBy: { createdAt: 'desc' as const },
+    orderBy: { createdAt: "desc" as const },
     include: { requestedBy: { select: { id: true, fullName: true } } },
   },
   activities: {
-    orderBy: { createdAt: 'desc' as const },
+    orderBy: { createdAt: "desc" as const },
     include: { user: { select: { id: true, fullName: true } } },
   },
-} satisfies Prisma.FileDocumentInclude
+} satisfies Prisma.FileDocumentInclude;
 
-type DocumentRow = Prisma.FileDocumentGetPayload<{ include: typeof DOCUMENT_INCLUDE }>
+type DocumentRow = Prisma.FileDocumentGetPayload<{
+  include: typeof DOCUMENT_INCLUDE;
+}>;
 
 function serializeDocument(row: DocumentRow) {
-  const latest = latestVersion(row.versions)
-  const expired = row.status === 'VERIFIED' && isVersionExpired(latest)
+  const latest = latestVersion(row.versions);
+  const expired = row.status === "VERIFIED" && isVersionExpired(latest);
   return {
     id: row.id,
     code: row.code,
@@ -392,20 +629,26 @@ function serializeDocument(row: DocumentRow) {
     typeName: row.typeNameSnapshot,
     requirement: row.requirement,
     status: row.status,
-    statusLabel: expired ? 'Expired' : statusLabel(row.status),
-    expiryStatus: latest ? expiryState(latest.expiryDate) : 'NONE',
+    statusLabel: expired ? "Expired" : statusLabel(row.status),
+    expiryStatus: latest ? expiryState(latest.expiryDate) : "NONE",
     archivedAt: row.archivedAt?.toISOString() || null,
     latestVersion: latest ? serializeVersion(latest as VersionRow) : null,
-    versions: row.versions.map((version) => serializeVersion(version as VersionRow)),
+    versions: row.versions.map((version) =>
+      serializeVersion(version as VersionRow),
+    ),
     requests: row.requests.map((request) => ({
       id: request.id,
       code: request.code,
       method: request.method,
-      dueDate: request.dueDate ? request.dueDate.toISOString().slice(0, 10) : null,
+      dueDate: request.dueDate
+        ? request.dueDate.toISOString().slice(0, 10)
+        : null,
       remarks: request.remarks,
       status: request.status,
       requestedAt: request.createdAt.toISOString(),
-      requestedBy: request.requestedBy ? { id: request.requestedBy.id, name: request.requestedBy.fullName } : null,
+      requestedBy: request.requestedBy
+        ? { id: request.requestedBy.id, name: request.requestedBy.fullName }
+        : null,
       activityId: request.activityId,
       communicationEventId: request.communicationEventId,
     })),
@@ -414,52 +657,67 @@ function serializeDocument(row: DocumentRow) {
       action: activity.action,
       notes: activity.notes,
       createdAt: activity.createdAt.toISOString(),
-      user: activity.user ? { id: activity.user.id, name: activity.user.fullName } : null,
+      user: activity.user
+        ? { id: activity.user.id, name: activity.user.fullName }
+        : null,
     })),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-  }
+  };
 }
 
 async function loadDocument(fileId: string, documentId: string) {
   const document = await prisma.fileDocument.findFirst({
     where: { id: documentId, fileId },
     include: DOCUMENT_INCLUDE,
-  })
-  if (!document) throw httpError.notFound('Document not found.')
-  return document
+  });
+  if (!document) throw httpError.notFound("Document not found.");
+  return document;
 }
 
 function assertSensitive(auth: AuthContext, typeCode: string) {
   if (SENSITIVE_TYPES.has(typeCode) && !canAccessSensitive(auth)) {
-    throw httpError.accessDenied('You are not authorized to access this document.')
+    throw httpError.accessDenied(
+      "You are not authorized to access this document.",
+    );
   }
 }
 
-export async function openCrmFile(auth: AuthContext, leadId: string, meta?: AuditMeta) {
+export async function openCrmFile(
+  auth: AuthContext,
+  leadId: string,
+  meta?: AuditMeta,
+) {
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
-    select: { id: true, code: true, name: true, ownerId: true, statusCode: true, status: true },
-  })
-  if (!lead) throw httpError.notFound('Lead not found.')
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      ownerId: true,
+      statusCode: true,
+      status: true,
+    },
+  });
+  if (!lead) throw httpError.notFound("Lead not found.");
 
-  const existing = await prisma.crmFile.findUnique({ where: { leadId } })
-  if (existing) return existing
+  const existing = await prisma.crmFile.findUnique({ where: { leadId } });
+  if (existing) return existing;
 
-  const template = await loadTemplate()
+  const template = await loadTemplate();
   const file = await prisma.$transaction(async (tx) => {
-    const code = await nextCode(tx, 'crm_file', 'FILE')
+    const code = await nextCode(tx, "crm_file", "FILE");
     const created = await tx.crmFile.create({
       data: {
         code,
         leadId: lead.id,
         studentName: lead.name,
         ownerId: lead.ownerId,
-        status: 'OPEN',
-        documentReadiness: 'INCOMPLETE',
+        status: "OPEN",
+        documentReadiness: "INCOMPLETE",
         openedById: auth.user.id,
       },
-    })
+    });
     for (const item of template) {
       const checklist = await tx.fileChecklistItem.create({
         data: {
@@ -471,8 +729,8 @@ export async function openCrmFile(auth: AuthContext, leadId: string, meta?: Audi
           isRequired: item.isRequired,
           sortOrder: item.sortOrder,
         },
-      })
-      const docCode = await nextCode(tx, 'file_document', 'DOC')
+      });
+      const docCode = await nextCode(tx, "file_document", "DOC");
       await tx.fileDocument.create({
         data: {
           code: docCode,
@@ -482,128 +740,180 @@ export async function openCrmFile(auth: AuthContext, leadId: string, meta?: Audi
           categoryNameSnapshot: item.categoryName,
           typeCode: item.typeCode,
           typeNameSnapshot: item.typeName,
-          requirement: item.isRequired ? 'REQUIRED' : 'OPTIONAL',
-          status: 'NOT_REQUESTED',
+          requirement: item.isRequired ? "REQUIRED" : "OPTIONAL",
+          status: "NOT_REQUESTED",
         },
-      })
+      });
     }
-    return created
-  })
+    return created;
+  });
 
   await recordLeadTimeline({
     leadId: lead.id,
     leadName: lead.name,
     userId: auth.user.id,
-    type: 'OTHER',
+    type: "OTHER",
     notes: `File ${file.code} opened. Initial document checklist created.`,
     meta,
-    metadata: { fileId: file.id, fileCode: file.code, event: 'file_opened' },
-  })
+    metadata: { fileId: file.id, fileCode: file.code, event: "file_opened" },
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_OPENED',
-    entityType: 'crm_file',
+    action: "FILE_OPENED",
+    entityType: "crm_file",
     entityId: file.id,
     ipAddress: meta?.ipAddress,
     userAgent: meta?.userAgent,
     metadata: { fileCode: file.code, leadId: lead.id, leadCode: lead.code },
-  })
+  });
   try {
     const owner = lead.ownerId
-      ? await prisma.user.findUnique({ where: { id: lead.ownerId }, select: { fullName: true } })
-      : null
-    const { dispatchCrmEvent } = await import('../notifications/notifications.service')
+      ? await prisma.user.findUnique({
+          where: { id: lead.ownerId },
+          select: { fullName: true },
+        })
+      : null;
+    const { dispatchCrmEvent } =
+      await import("../notifications/notifications.service");
     await dispatchCrmEvent({
-      eventType: 'file_opened',
+      eventType: "file_opened",
       dedupeKey: `file-opened:${file.id}`,
-      title: 'File Opened',
-      body: `Lead: ${lead.name} — File ID: ${file.code} — Owner: ${owner?.fullName || '—'}`,
+      title: "File Opened",
+      body: `Lead: ${lead.name} — File ID: ${file.code} — Owner: ${owner?.fullName || "—"}`,
       link: `/leads/${lead.id}`,
       leadId: lead.id,
       ownerId: lead.ownerId,
-      payload: { leadName: lead.name, leadCode: lead.code, fileCode: file.code, ownerName: owner?.fullName || null },
-      actions: [{ key: 'open_file', label: 'Open File', href: `/leads/${lead.id}` }],
-    })
+      payload: {
+        leadName: lead.name,
+        leadCode: lead.code,
+        fileCode: file.code,
+        ownerName: owner?.fullName || null,
+      },
+      actions: [
+        { key: "open_file", label: "Open File", href: `/leads/${lead.id}` },
+      ],
+    });
   } catch (error) {
-    console.error('[notifications] File opening notification failed:', error)
+    console.error("[notifications] File opening notification failed:", error);
   }
-  return file
+  return file;
 }
 
 async function fileContext(auth: AuthContext, leadId: string) {
-  assertView(auth)
-  const lead = await assertCanViewLead(auth, leadId)
-  let file = await prisma.crmFile.findUnique({ where: { leadId } })
+  assertView(auth);
+  const lead = await assertCanViewLead(auth, leadId);
+  let file = await prisma.crmFile.findUnique({ where: { leadId } });
   if (!file && (await isFileOpenedLead(lead))) {
     try {
-      file = await openCrmFile(auth, leadId)
+      file = await openCrmFile(auth, leadId);
     } catch (error) {
-      file = await prisma.crmFile.findUnique({ where: { leadId } })
-      if (!file) throw error
+      file = await prisma.crmFile.findUnique({ where: { leadId } });
+      if (!file) throw error;
     }
   }
-  return { lead, file }
+  return { lead, file };
 }
 
-function buildSummary(checklist: Array<{ typeCode: string; isRequired: boolean; isActive: boolean }>, documents: DocumentRow[]) {
-  const activeItems = checklist.filter((item) => item.isActive)
-  const activeDocs = documents.filter((doc) => !doc.archivedAt)
-  const byType = new Map(activeDocs.map((doc) => [doc.typeCode, doc]))
-  const required = activeItems.filter((item) => item.isRequired)
-  let verifiedRequired = 0
-  let missing = 0
+function buildSummary(
+  checklist: Array<{
+    typeCode: string;
+    isRequired: boolean;
+    isActive: boolean;
+  }>,
+  documents: DocumentRow[],
+) {
+  const activeItems = checklist.filter((item) => item.isActive);
+  const activeDocs = documents.filter((doc) => !doc.archivedAt);
+  const byType = new Map(activeDocs.map((doc) => [doc.typeCode, doc]));
+  const required = activeItems.filter((item) => item.isRequired);
+  let verifiedRequired = 0;
+  let missing = 0;
   for (const item of required) {
-    const doc = byType.get(item.typeCode)
-    const latest = doc ? latestVersion(doc.versions) : null
-    const verified = doc?.status === 'VERIFIED' && !isVersionExpired(latest)
-    if (verified) verifiedRequired += 1
-    if (!latest) missing += 1
+    const doc = byType.get(item.typeCode);
+    const latest = doc ? latestVersion(doc.versions) : null;
+    const verified = doc?.status === "VERIFIED" && !isVersionExpired(latest);
+    if (verified) verifiedRequired += 1;
+    if (!latest) missing += 1;
   }
-  const verified = activeDocs.filter((doc) => doc.status === 'VERIFIED' && !isVersionExpired(latestVersion(doc.versions))).length
-  const rejected = activeDocs.filter((doc) => doc.status === 'REJECTED' || doc.status === 'REUPLOAD_REQUIRED').length
+  const verified = activeDocs.filter(
+    (doc) =>
+      doc.status === "VERIFIED" &&
+      !isVersionExpired(latestVersion(doc.versions)),
+  ).length;
+  const rejected = activeDocs.filter(
+    (doc) => doc.status === "REJECTED" || doc.status === "REUPLOAD_REQUIRED",
+  ).length;
   const pending = activeItems.filter((item) => {
-    const doc = byType.get(item.typeCode)
-    if (!doc) return true
-    return doc.status !== 'VERIFIED' && doc.status !== 'REJECTED' && doc.status !== 'REUPLOAD_REQUIRED' && doc.status !== 'ARCHIVED'
-  }).length
+    const doc = byType.get(item.typeCode);
+    if (!doc) return true;
+    return (
+      doc.status !== "VERIFIED" &&
+      doc.status !== "REJECTED" &&
+      doc.status !== "REUPLOAD_REQUIRED" &&
+      doc.status !== "ARCHIVED"
+    );
+  }).length;
   return {
     total: activeItems.length,
     verified,
     pending,
     rejected,
     required: required.length,
-    requested: activeDocs.filter((doc) => doc.status === 'REQUESTED').length,
+    requested: activeDocs.filter((doc) => doc.status === "REQUESTED").length,
     received: activeDocs.filter((doc) => latestVersion(doc.versions)).length,
-    underReview: activeDocs.filter((doc) => doc.status === 'UNDER_REVIEW').length,
+    underReview: activeDocs.filter((doc) => doc.status === "UNDER_REVIEW")
+      .length,
     missing,
-    completionPercent: required.length === 0 ? 100 : Math.round((verifiedRequired / required.length) * 100),
-  }
+    completionPercent:
+      required.length === 0
+        ? 100
+        : Math.round((verifiedRequired / required.length) * 100),
+  };
 }
 
-export async function getFileWorkspace(auth: AuthContext, leadId: string, options?: { archived?: boolean }) {
-  const { lead, file } = await fileContext(auth, leadId)
+export async function getFileWorkspace(
+  auth: AuthContext,
+  leadId: string,
+  options?: { archived?: boolean },
+) {
+  const { lead, file } = await fileContext(auth, leadId);
   if (!file) {
-    return { available: false, file: null, summary: null, checklist: [], documents: [], catalog: [] }
+    return {
+      available: false,
+      file: null,
+      summary: null,
+      checklist: [],
+      documents: [],
+      catalog: [],
+    };
   }
 
-  await refreshReadiness(file.id)
+  await refreshReadiness(file.id);
   const [checklist, documents, catalog, reasons] = await Promise.all([
-    prisma.fileChecklistItem.findMany({ where: { fileId: file.id }, orderBy: { sortOrder: 'asc' } }),
+    prisma.fileChecklistItem.findMany({
+      where: { fileId: file.id },
+      orderBy: { sortOrder: "asc" },
+    }),
     prisma.fileDocument.findMany({
-      where: { fileId: file.id, ...(options?.archived ? {} : { archivedAt: null }) },
+      where: {
+        fileId: file.id,
+        ...(options?.archived ? {} : { archivedAt: null }),
+      },
       include: DOCUMENT_INCLUDE,
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: "asc" },
     }),
     prisma.masterDataItem.findMany({
-      where: { categoryKey: 'DOCUMENT_TYPE', status: 'ACTIVE' },
+      where: { categoryKey: "DOCUMENT_TYPE", status: "ACTIVE" },
       include: { parent: { select: { code: true, name: true } } },
-      orderBy: { sortOrder: 'asc' },
+      orderBy: { sortOrder: "asc" },
     }),
     listRejectionReasons(),
-  ])
+  ]);
 
-  const summary = buildSummary(checklist, documents)
-  const visibleDocs = documents.filter((doc) => !SENSITIVE_TYPES.has(doc.typeCode) || canAccessSensitive(auth))
+  const summary = buildSummary(checklist, documents);
+  const visibleDocs = documents.filter(
+    (doc) => !SENSITIVE_TYPES.has(doc.typeCode) || canAccessSensitive(auth),
+  );
 
   return {
     available: true,
@@ -614,14 +924,17 @@ export async function getFileWorkspace(auth: AuthContext, leadId: string, option
       leadCode: lead.code,
       studentName: file.studentName,
       status: file.status,
-      documentReadiness: summary.completionPercent === 100 ? 'COMPLETE' : file.documentReadiness,
+      documentReadiness:
+        summary.completionPercent === 100 ? "COMPLETE" : file.documentReadiness,
       openedAt: file.openedAt.toISOString(),
     },
     summary,
     checklist: checklist.map((item) => {
-      const doc = documents.find((row) => row.typeCode === item.typeCode && !row.archivedAt)
-      const latest = doc ? latestVersion(doc.versions) : null
-      const completed = doc?.status === 'VERIFIED' && !isVersionExpired(latest)
+      const doc = documents.find(
+        (row) => row.typeCode === item.typeCode && !row.archivedAt,
+      );
+      const latest = doc ? latestVersion(doc.versions) : null;
+      const completed = doc?.status === "VERIFIED" && !isVersionExpired(latest);
       return {
         id: item.id,
         categoryCode: item.categoryCode,
@@ -632,64 +945,101 @@ export async function getFileWorkspace(auth: AuthContext, leadId: string, option
         isActive: item.isActive,
         completed: Boolean(completed),
         documentId: doc?.id || null,
-        status: doc ? (isVersionExpired(latest) && doc.status === 'VERIFIED' ? 'EXPIRED' : doc.status) : 'MISSING',
-      }
+        status: doc
+          ? isVersionExpired(latest) && doc.status === "VERIFIED"
+            ? "EXPIRED"
+            : doc.status
+          : "MISSING",
+      };
     }),
     documents: visibleDocs.map(serializeDocument),
     rejectionReasons: reasons,
     catalog: catalog
-      .filter((item) => item.parent?.code !== 'APPLICATION' && !APPLICATION_TYPES.has(item.code || ''))
+      .filter(
+        (item) =>
+          item.parent?.code !== "APPLICATION" &&
+          !APPLICATION_TYPES.has(item.code || ""),
+      )
       .map((item) => ({
         typeCode: item.code,
         typeName: item.name,
-        categoryCode: item.parent?.code || 'OTHER',
-        categoryName: item.parent?.name || 'Other',
+        categoryCode: item.parent?.code || "OTHER",
+        categoryName: item.parent?.name || "Other",
       })),
-  }
+  };
 }
 
 async function resolveCatalogType(typeCode: string) {
   const type = await prisma.masterDataItem.findFirst({
-    where: { categoryKey: 'DOCUMENT_TYPE', code: typeCode, status: 'ACTIVE' },
+    where: { categoryKey: "DOCUMENT_TYPE", code: typeCode, status: "ACTIVE" },
     include: { parent: { select: { code: true, name: true } } },
-  })
+  });
   if (!type) {
-    throw httpError.validation({ typeCode: 'Document category is required.' }, 'Please select a document.')
-  }
-  if (type.parent?.code === 'APPLICATION' || APPLICATION_TYPES.has(type.code || '')) {
     throw httpError.validation(
-      { typeCode: 'Application-specific documents are managed by a future Application System.' },
-      'Application-specific documents are managed by a future Application System.',
-    )
+      { typeCode: "Document category is required." },
+      "Please select a document.",
+    );
+  }
+  if (
+    type.parent?.code === "APPLICATION" ||
+    APPLICATION_TYPES.has(type.code || "")
+  ) {
+    throw httpError.validation(
+      {
+        typeCode:
+          "Application-specific documents are managed by a future Application System.",
+      },
+      "Application-specific documents are managed by a future Application System.",
+    );
   }
   return {
     typeCode: type.code || typeCode,
     typeName: type.name,
-    categoryCode: type.parent?.code || 'OTHER',
-    categoryName: type.parent?.name || 'Other',
-  }
+    categoryCode: type.parent?.code || "OTHER",
+    categoryName: type.parent?.name || "Other",
+  };
 }
 
-export async function addChecklistItem(auth: AuthContext, leadId: string, body: Record<string, unknown>, meta: AuditMeta) {
-  assertManage(auth)
-  const { file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.validation({ file: 'File opening is required before documents can be managed.' })
-  const typeCode = asString(body.typeCode).toUpperCase()
-  if (!typeCode) throw httpError.validation({ typeCode: 'Please select a document.' })
-  const optional = body.isRequired === false || body.isRequired === 'false'
-  const metaType = await resolveCatalogType(typeCode)
+export async function addChecklistItem(
+  auth: AuthContext,
+  leadId: string,
+  body: Record<string, unknown>,
+  meta: AuditMeta,
+) {
+  assertManage(auth);
+  const { file } = await fileContext(auth, leadId);
+  if (!file)
+    throw httpError.validation({
+      file: "File opening is required before documents can be managed.",
+    });
+  const typeCode = asString(body.typeCode).toUpperCase();
+  if (!typeCode)
+    throw httpError.validation({ typeCode: "Please select a document." });
+  const optional = body.isRequired === false || body.isRequired === "false";
+  const metaType = await resolveCatalogType(typeCode);
 
   const existing = await prisma.fileChecklistItem.findUnique({
-    where: { fileId_typeCode: { fileId: file.id, typeCode: metaType.typeCode } },
-  })
+    where: {
+      fileId_typeCode: { fileId: file.id, typeCode: metaType.typeCode },
+    },
+  });
   if (existing?.isActive) {
-    throw new HttpError(409, 'A document of this type already exists.', 'DUPLICATE_DOCUMENT')
+    throw new HttpError(
+      409,
+      "A document of this type already exists.",
+      "DUPLICATE_DOCUMENT",
+    );
   }
 
   const item = existing
     ? await prisma.fileChecklistItem.update({
         where: { id: existing.id },
-        data: { isActive: true, isRequired: !optional, typeName: metaType.typeName, categoryName: metaType.categoryName },
+        data: {
+          isActive: true,
+          isRequired: !optional,
+          typeName: metaType.typeName,
+          categoryName: metaType.categoryName,
+        },
       })
     : await prisma.fileChecklistItem.create({
         data: {
@@ -702,14 +1052,14 @@ export async function addChecklistItem(auth: AuthContext, leadId: string, body: 
           sortOrder: 100,
           addedById: auth.user.id,
         },
-      })
+      });
 
   const currentDoc = await prisma.fileDocument.findFirst({
     where: { fileId: file.id, typeCode: metaType.typeCode, archivedAt: null },
-  })
+  });
   if (!currentDoc) {
     await prisma.$transaction(async (tx) => {
-      const docCode = await nextCode(tx, 'file_document', 'DOC')
+      const docCode = await nextCode(tx, "file_document", "DOC");
       await tx.fileDocument.create({
         data: {
           code: docCode,
@@ -719,29 +1069,32 @@ export async function addChecklistItem(auth: AuthContext, leadId: string, body: 
           categoryNameSnapshot: metaType.categoryName,
           typeCode: metaType.typeCode,
           typeNameSnapshot: metaType.typeName,
-          requirement: optional ? 'OPTIONAL' : 'REQUIRED',
-          status: 'NOT_REQUESTED',
+          requirement: optional ? "OPTIONAL" : "REQUIRED",
+          status: "NOT_REQUESTED",
         },
-      })
-    })
+      });
+    });
   } else {
     await prisma.fileDocument.update({
       where: { id: currentDoc.id },
-      data: { checklistItemId: item.id, requirement: optional ? 'OPTIONAL' : 'REQUIRED' },
-    })
+      data: {
+        checklistItemId: item.id,
+        requirement: optional ? "OPTIONAL" : "REQUIRED",
+      },
+    });
   }
 
-  await refreshReadiness(file.id)
+  await refreshReadiness(file.id);
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_CHECKLIST_UPDATED',
-    entityType: 'crm_file',
+    action: "FILE_CHECKLIST_UPDATED",
+    entityType: "crm_file",
     entityId: file.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
-    metadata: { typeCode: metaType.typeCode, change: 'added' },
-  })
-  return getFileWorkspace(auth, leadId)
+    metadata: { typeCode: metaType.typeCode, change: "added" },
+  });
+  return getFileWorkspace(auth, leadId);
 }
 
 export async function updateChecklistItem(
@@ -751,59 +1104,74 @@ export async function updateChecklistItem(
   body: Record<string, unknown>,
   meta: AuditMeta,
 ) {
-  assertManage(auth)
-  const { file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const item = await prisma.fileChecklistItem.findFirst({ where: { id: itemId, fileId: file.id } })
-  if (!item) throw httpError.notFound('Checklist item not found.')
+  assertManage(auth);
+  const { file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const item = await prisma.fileChecklistItem.findFirst({
+    where: { id: itemId, fileId: file.id },
+  });
+  if (!item) throw httpError.notFound("Checklist item not found.");
 
-  const remove = body.remove === true || body.remove === 'true'
-  const data: Prisma.FileChecklistItemUpdateInput = {}
-  if (remove) data.isActive = false
-  if (body.isRequired === true || body.isRequired === 'true') data.isRequired = true
-  if (body.isRequired === false || body.isRequired === 'false') data.isRequired = false
-  const updated = await prisma.fileChecklistItem.update({ where: { id: item.id }, data })
+  const remove = body.remove === true || body.remove === "true";
+  const data: Prisma.FileChecklistItemUpdateInput = {};
+  if (remove) data.isActive = false;
+  if (body.isRequired === true || body.isRequired === "true")
+    data.isRequired = true;
+  if (body.isRequired === false || body.isRequired === "false")
+    data.isRequired = false;
+  const updated = await prisma.fileChecklistItem.update({
+    where: { id: item.id },
+    data,
+  });
   await prisma.fileDocument.updateMany({
     where: { fileId: file.id, typeCode: item.typeCode, archivedAt: null },
-    data: { requirement: updated.isRequired ? 'REQUIRED' : 'OPTIONAL' },
-  })
-  await refreshReadiness(file.id)
+    data: { requirement: updated.isRequired ? "REQUIRED" : "OPTIONAL" },
+  });
+  await refreshReadiness(file.id);
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_CHECKLIST_UPDATED',
-    entityType: 'crm_file',
+    action: "FILE_CHECKLIST_UPDATED",
+    entityType: "crm_file",
     entityId: file.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
-    metadata: { typeCode: item.typeCode, remove, isRequired: updated.isRequired },
-  })
-  return getFileWorkspace(auth, leadId)
+    metadata: {
+      typeCode: item.typeCode,
+      remove,
+      isRequired: updated.isRequired,
+    },
+  });
+  return getFileWorkspace(auth, leadId);
 }
 
 async function createVersion(input: {
-  tx: Prisma.TransactionClient
-  documentId: string
-  userId: string
-  actorKind: 'EMPLOYEE' | 'STUDENT_PORTAL'
-  file: Express.Multer.File
-  label?: string
-  documentDate: Date | null
-  expiryDate: Date | null
-  remarks: string
-  primary: boolean
-  storedFileId: string
+  tx: Prisma.TransactionClient;
+  documentId: string;
+  userId: string;
+  actorKind: "EMPLOYEE" | "STUDENT_PORTAL";
+  file: Express.Multer.File;
+  label?: string;
+  documentDate: Date | null;
+  expiryDate: Date | null;
+  remarks: string;
+  primary: boolean;
+  storedFileId: string;
 }) {
   const previous = await input.tx.fileDocumentVersion.findFirst({
     where: { documentId: input.documentId },
-    orderBy: { versionNumber: 'desc' },
-  })
+    orderBy: { versionNumber: "desc" },
+  });
   if (previous) {
     await input.tx.fileDocumentVersion.updateMany({
       where: { documentId: input.documentId, isLatest: true },
       data: { isLatest: false },
-    })
+    });
   }
-  const stored = await saveFileDocumentAsset(input.storedFileId, input.file, input.file.originalname)
+  const stored = await saveFileDocumentAsset(
+    input.storedFileId,
+    input.file,
+    input.file.originalname,
+  );
   const version = await input.tx.fileDocumentVersion.create({
     data: {
       documentId: input.documentId,
@@ -825,8 +1193,8 @@ async function createVersion(input: {
         },
       },
     },
-  })
-  return version
+  });
+  return version;
 }
 
 export async function uploadFileDocument(
@@ -836,36 +1204,56 @@ export async function uploadFileDocument(
   body: Record<string, unknown>,
   meta: AuditMeta,
 ) {
-  assertUpload(auth)
-  if (!file) throw httpError.invalidUpload('Please select a document.')
-  const { lead, file: crmFile } = await fileContext(auth, leadId)
-  if (!crmFile) throw httpError.validation({ file: 'File opening is required before documents can be uploaded.' })
+  assertUpload(auth);
+  if (!file) throw httpError.invalidUpload("Please select a document.");
+  const { lead, file: crmFile } = await fileContext(auth, leadId);
+  if (!crmFile)
+    throw httpError.validation({
+      file: "File opening is required before documents can be uploaded.",
+    });
 
-  const mode = (asString(body.mode) || 'create').toLowerCase() as UploadMode
-  const typeCode = asString(body.typeCode).toUpperCase()
-  const documentId = asString(body.documentId)
-  const label = asString(body.label)
-  const remarks = asString(body.remarks)
-  const documentDate = parseOptionalDate(body.documentDate, 'documentDate')
-  const expiryDate = parseOptionalDate(body.expiryDate, 'expiryDate')
+  const mode = (asString(body.mode) || "create").toLowerCase() as UploadMode;
+  const typeCode = asString(body.typeCode).toUpperCase();
+  const documentId = asString(body.documentId);
+  const label = asString(body.label);
+  const remarks = asString(body.remarks);
+  const documentDate = parseOptionalDate(body.documentDate, "documentDate");
+  const expiryDate = parseOptionalDate(body.expiryDate, "expiryDate");
   if (documentDate && expiryDate && expiryDate < documentDate) {
-    throw httpError.validation({ expiryDate: 'Expiry date cannot be before document date.' })
+    throw httpError.validation({
+      expiryDate: "Expiry date cannot be before document date.",
+    });
   }
-  const actorKind = asString(body.uploadedByKind).toUpperCase() === 'STUDENT_PORTAL' ? 'STUDENT_PORTAL' : 'EMPLOYEE'
+  const actorKind =
+    asString(body.uploadedByKind).toUpperCase() === "STUDENT_PORTAL"
+      ? "STUDENT_PORTAL"
+      : "EMPLOYEE";
 
   let document = documentId
-    ? await prisma.fileDocument.findFirst({ where: { id: documentId, fileId: crmFile.id } })
-    : await prisma.fileDocument.findFirst({ where: { fileId: crmFile.id, typeCode, archivedAt: null } })
+    ? await prisma.fileDocument.findFirst({
+        where: { id: documentId, fileId: crmFile.id },
+      })
+    : await prisma.fileDocument.findFirst({
+        where: { fileId: crmFile.id, typeCode, archivedAt: null },
+      });
   if (!document && typeCode) {
-    const metaType = await resolveCatalogType(typeCode)
+    const metaType = await resolveCatalogType(typeCode);
     const active = await prisma.fileDocument.findFirst({
-      where: { fileId: crmFile.id, typeCode: metaType.typeCode, archivedAt: null },
-    })
+      where: {
+        fileId: crmFile.id,
+        typeCode: metaType.typeCode,
+        archivedAt: null,
+      },
+    });
     if (active) {
-      throw new HttpError(409, 'A document of this type already exists.', 'DUPLICATE_DOCUMENT')
+      throw new HttpError(
+        409,
+        "A document of this type already exists.",
+        "DUPLICATE_DOCUMENT",
+      );
     }
     document = await prisma.$transaction(async (tx) => {
-      const docCode = await nextCode(tx, 'file_document', 'DOC')
+      const docCode = await nextCode(tx, "file_document", "DOC");
       return tx.fileDocument.create({
         data: {
           code: docCode,
@@ -875,40 +1263,73 @@ export async function uploadFileDocument(
           typeCode: metaType.typeCode,
           typeNameSnapshot: metaType.typeName,
           requirement: null,
-          status: 'NOT_REQUESTED',
+          status: "NOT_REQUESTED",
         },
-      })
-    })
+      });
+    });
   }
-  if (!document) throw httpError.invalidUpload('Please select a document.')
-  if (document.archivedAt) throw httpError.validation({ documentId: 'This document is archived.' })
-  assertSensitive(auth, document.typeCode)
+  if (!document) throw httpError.invalidUpload("Please select a document.");
+  if (document.archivedAt)
+    throw httpError.validation({ documentId: "This document is archived." });
+  assertSensitive(auth, document.typeCode);
 
-  const versionCount = await prisma.fileDocumentVersion.count({ where: { documentId: document.id } })
-  const reupload = mode === 'reupload' || document.status === 'REUPLOAD_REQUIRED' || document.status === 'REJECTED'
-  if (mode === 'additional') {
-    if (!versionCount) throw httpError.validation({ mode: 'Upload the document before adding another file.' })
-    if (document.status === 'REUPLOAD_REQUIRED' || document.status === 'REJECTED') {
-      throw httpError.validation({ mode: 'Re-upload creates a new version.' })
+  const versionCount = await prisma.fileDocumentVersion.count({
+    where: { documentId: document.id },
+  });
+  const reupload =
+    mode === "reupload" ||
+    document.status === "REUPLOAD_REQUIRED" ||
+    document.status === "REJECTED";
+  if (mode === "additional") {
+    if (!versionCount)
+      throw httpError.validation({
+        mode: "Upload the document before adding another file.",
+      });
+    if (
+      document.status === "REUPLOAD_REQUIRED" ||
+      document.status === "REJECTED"
+    ) {
+      throw httpError.validation({ mode: "Re-upload creates a new version." });
     }
-  } else if (versionCount > 0 && !reupload && mode !== 'create') {
-    throw new HttpError(409, 'A document of this type already exists.', 'DUPLICATE_DOCUMENT')
-  } else if (versionCount > 0 && !reupload && mode === 'create') {
-    throw new HttpError(409, 'A document of this type already exists.', 'DUPLICATE_DOCUMENT')
+  } else if (versionCount > 0 && !reupload && mode !== "create") {
+    throw new HttpError(
+      409,
+      "A document of this type already exists.",
+      "DUPLICATE_DOCUMENT",
+    );
+  } else if (versionCount > 0 && !reupload && mode === "create") {
+    throw new HttpError(
+      409,
+      "A document of this type already exists.",
+      "DUPLICATE_DOCUMENT",
+    );
   }
 
   try {
     const createdVersion = await prisma.$transaction(async (tx) => {
-      if (mode === 'additional') {
+      if (mode === "additional") {
         const latest = await tx.fileDocumentVersion.findFirst({
           where: { documentId: document!.id, isLatest: true },
           include: { assets: true },
-        })
-        if (!latest) throw httpError.validation({ mode: 'Upload the document before adding another file.' })
-        const stored = await saveFileDocumentAsset(crmFile.id, file, file.originalname)
-        const makePrimary = body.primary === true || body.primary === 'true' || latest.assets.length === 0
+        });
+        if (!latest)
+          throw httpError.validation({
+            mode: "Upload the document before adding another file.",
+          });
+        const stored = await saveFileDocumentAsset(
+          crmFile.id,
+          file,
+          file.originalname,
+        );
+        const makePrimary =
+          body.primary === true ||
+          body.primary === "true" ||
+          latest.assets.length === 0;
         if (makePrimary) {
-          await tx.fileDocumentAsset.updateMany({ where: { versionId: latest.id }, data: { isPrimary: false } })
+          await tx.fileDocumentAsset.updateMany({
+            where: { versionId: latest.id },
+            data: { isPrimary: false },
+          });
         }
         await tx.fileDocumentAsset.create({
           data: {
@@ -920,7 +1341,7 @@ export async function uploadFileDocument(
             fileSize: stored.fileSize,
             isPrimary: makePrimary,
           },
-        })
+        });
         if (documentDate || expiryDate || remarks) {
           await tx.fileDocumentVersion.update({
             where: { id: latest.id },
@@ -929,9 +1350,9 @@ export async function uploadFileDocument(
               expiryDate: expiryDate ?? undefined,
               remarks: remarks || undefined,
             },
-          })
+          });
         }
-        return latest
+        return latest;
       }
       return createVersion({
         tx,
@@ -945,51 +1366,58 @@ export async function uploadFileDocument(
         remarks,
         primary: true,
         storedFileId: crmFile.id,
-      })
-    })
+      });
+    });
 
-    await prisma.fileDocument.update({ where: { id: document.id }, data: { status: 'RECEIVED' } })
+    await prisma.fileDocument.update({
+      where: { id: document.id },
+      data: { status: "RECEIVED" },
+    });
     await prisma.fileDocumentRequest.updateMany({
-      where: { documentId: document.id, status: 'OPEN' },
-      data: { status: 'FULFILLED' },
-    })
+      where: { documentId: document.id, status: "OPEN" },
+      data: { status: "FULFILLED" },
+    });
     await recordActivity({
       documentId: document.id,
-      action: reupload && mode !== 'additional' ? 'REUPLOADED' : 'UPLOADED',
+      action: reupload && mode !== "additional" ? "REUPLOADED" : "UPLOADED",
       userId: auth.user.id,
       notes: remarks || null,
       metadata: { versionId: createdVersion.id, mode },
-    })
+    });
     await recordLeadTimeline({
       leadId: lead.id,
       leadName: lead.name,
       userId: auth.user.id,
-      type: 'OTHER',
+      type: "OTHER",
       notes: `Document uploaded: ${document.typeNameSnapshot}`,
-      outcome: 'Document uploaded',
+      outcome: "Document uploaded",
       meta,
       metadata: {
-        event: 'FILE_DOCUMENT_UPLOADED',
+        event: "FILE_DOCUMENT_UPLOADED",
         fileId: crmFile.id,
         documentId: document.id,
         documentCode: document.code,
       },
-    })
+    });
     await writeAuditLog({
       userId: auth.user.id,
-      action: 'FILE_DOCUMENT_UPLOADED',
-      entityType: 'file_document',
+      action: "FILE_DOCUMENT_UPLOADED",
+      entityType: "file_document",
       entityId: document.id,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
       metadata: { fileCode: crmFile.code, typeCode: document.typeCode, mode },
-    })
-    await refreshReadiness(crmFile.id)
-    return { document: serializeDocument(await loadDocument(crmFile.id, document.id)) }
+    });
+    await refreshReadiness(crmFile.id);
+    return {
+      document: serializeDocument(await loadDocument(crmFile.id, document.id)),
+    };
   } catch (error) {
-    if (error instanceof HttpError) throw error
-    console.error('[file-documents] upload failed:', error)
-    throw httpError.invalidUpload('Unable to upload the document. Please try again.')
+    if (error instanceof HttpError) throw error;
+    console.error("[file-documents] upload failed:", error);
+    throw httpError.invalidUpload(
+      "Unable to upload the document. Please try again.",
+    );
   }
 }
 
@@ -1000,173 +1428,214 @@ export async function requestFileDocument(
   body: Record<string, unknown>,
   meta: AuditMeta,
 ) {
-  assertUpload(auth)
-  const { lead, file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const document = await loadDocument(file.id, documentId)
-  if (document.archivedAt) throw httpError.validation({ documentId: 'This document is archived.' })
-  const method = asString(body.method).toUpperCase()
+  assertUpload(auth);
+  const { lead, file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const document = await loadDocument(file.id, documentId);
+  if (document.archivedAt)
+    throw httpError.validation({ documentId: "This document is archived." });
+  const method = asString(body.method).toUpperCase();
   if (!REQUEST_METHODS.has(method)) {
-    throw httpError.validation({ method: 'Request method is required.' })
+    throw httpError.validation({ method: "Request method is required." });
   }
-  const dueDate = parseOptionalDate(body.dueDate, 'dueDate')
-  const remarks = asString(body.remarks)
-  const message = remarks || `Please send your ${document.typeNameSnapshot}.`
+  const dueDate = parseOptionalDate(body.dueDate, "dueDate");
+  const remarks = asString(body.remarks);
+  const message = remarks || `Please send your ${document.typeNameSnapshot}.`;
 
   const activity = await prisma.activity.create({
     data: {
-      type: 'DOCUMENT_REQUEST',
+      type: "DOCUMENT_REQUEST",
       userId: auth.user.id,
       notes: message,
       relatedName: lead.name,
-      relatedType: 'lead',
+      relatedType: "lead",
       relatedId: lead.id,
       outcome: document.typeNameSnapshot,
-      metadata: { fileId: file.id, fileCode: file.code, documentId: document.id, method },
+      metadata: {
+        fileId: file.id,
+        fileCode: file.code,
+        documentId: document.id,
+        method,
+      },
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
     },
-  })
+  });
 
-  let communicationEventId: string | null = null
-  let sendError: string | null = null
-  if (method === 'EMAIL' && lead.email && (isEmailConfigured() || isEmailMockMode())) {
+  let communicationEventId: string | null = null;
+  let sendError: string | null = null;
+  if (
+    method === "EMAIL" &&
+    lead.email &&
+    (isEmailConfigured() || isEmailMockMode())
+  ) {
     try {
       const providerId = await sendMailboxEmail({
         to: lead.email,
         subject: `Document request: ${document.typeNameSnapshot}`,
         text: message,
         html: `<p>${message}</p>`,
-      })
+      });
       const event = await prisma.communicationEvent.create({
         data: {
-          channel: 'EMAIL',
-          direction: 'outgoing',
+          channel: "EMAIL",
+          direction: "outgoing",
           senderEmail: lead.email,
           subject: `Document request: ${document.typeNameSnapshot}`,
           message,
           leadId: lead.id,
-          processingStatus: 'PROCESSED',
+          processingStatus: "PROCESSED",
           externalId: providerId || `file-doc-${document.id}-${Date.now()}`,
           activityId: activity.id,
           processedAt: new Date(),
         },
-      })
-      communicationEventId = event.id
+      });
+      communicationEventId = event.id;
     } catch (error) {
-      sendError = error instanceof Error ? error.message : 'Email send failed'
+      sendError = error instanceof Error ? error.message : "Email send failed";
     }
   }
-  if (method === 'WHATSAPP') {
-    const to = (lead.whatsapp || lead.phone || '').replace(/\D/g, '')
+  if (method === "WHATSAPP") {
+    const to = (lead.whatsapp || lead.phone || "").replace(/\D/g, "");
     if (to && (isWhatsAppConfigured() || isWhatsAppMock())) {
       try {
-        const providerId = await sendWhatsApp(to, { kind: 'text', text: message })
+        const providerId = await sendWhatsApp(to, {
+          kind: "text",
+          text: message,
+        });
         const event = await prisma.communicationEvent.create({
           data: {
-            channel: 'WHATSAPP',
-            direction: 'outgoing',
+            channel: "WHATSAPP",
+            direction: "outgoing",
             senderPhone: to,
             message,
             leadId: lead.id,
-            processingStatus: 'PROCESSED',
-            externalId: providerId || `file-doc-wa-${document.id}-${Date.now()}`,
+            processingStatus: "PROCESSED",
+            externalId:
+              providerId || `file-doc-wa-${document.id}-${Date.now()}`,
             activityId: activity.id,
             processedAt: new Date(),
           },
-        })
-        communicationEventId = event.id
+        });
+        communicationEventId = event.id;
       } catch (error) {
-        sendError = error instanceof Error ? error.message : 'WhatsApp send failed'
+        sendError =
+          error instanceof Error ? error.message : "WhatsApp send failed";
       }
     }
   }
 
   const request = await prisma.$transaction(async (tx) => {
-    const code = await nextCode(tx, 'file_document_request', 'REQ')
+    const code = await nextCode(tx, "file_document_request", "REQ");
     return tx.fileDocumentRequest.create({
       data: {
         code,
         documentId: document.id,
         requestedById: auth.user.id,
         dueDate,
-        method: method as 'WHATSAPP' | 'EMAIL' | 'PHONE' | 'IN_PERSON' | 'OTHER',
+        method: method as
+          | "WHATSAPP"
+          | "EMAIL"
+          | "PHONE"
+          | "IN_PERSON"
+          | "OTHER",
         remarks: remarks || null,
         activityId: activity.id,
         communicationEventId,
       },
-    })
-  })
+    });
+  });
 
-  if (document.status === 'NOT_REQUESTED') {
-    await prisma.fileDocument.update({ where: { id: document.id }, data: { status: 'REQUESTED' } })
+  if (document.status === "NOT_REQUESTED") {
+    await prisma.fileDocument.update({
+      where: { id: document.id },
+      data: { status: "REQUESTED" },
+    });
   }
   await recordActivity({
     documentId: document.id,
-    action: 'REQUESTED',
+    action: "REQUESTED",
     userId: auth.user.id,
     notes: remarks || null,
     metadata: { requestId: request.id, method, sendError },
-  })
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_DOCUMENT_REQUESTED',
-    entityType: 'file_document',
+    action: "FILE_DOCUMENT_REQUESTED",
+    entityType: "file_document",
     entityId: document.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { requestCode: request.code, method, fileCode: file.code },
-  })
+  });
   if (file.ownerId && file.ownerId !== auth.user.id) {
     await createNotification({
       userId: file.ownerId,
       title: `${document.typeNameSnapshot} requested`,
       body: message,
       link: `/leads/${lead.id}?tab=file-documents`,
-      type: 'document_request',
+      type: "document_request",
       leadId: lead.id,
       dedupeKey: `file-doc-request:${request.id}`,
-    })
+    });
   }
-  return { request, document: serializeDocument(await loadDocument(file.id, document.id)) }
+  return {
+    request,
+    document: serializeDocument(await loadDocument(file.id, document.id)),
+  };
 }
 
-export async function reviewFileDocument(auth: AuthContext, leadId: string, documentId: string, meta: AuditMeta) {
-  assertVerify(auth)
-  const { lead, file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const document = await loadDocument(file.id, documentId)
-  assertSensitive(auth, document.typeCode)
-  const latest = latestVersion(document.versions)
-  if (!latest) throw httpError.validation({ documentId: 'Please select a document.' })
-  if (document.status !== 'RECEIVED' && document.status !== 'UNDER_REVIEW') {
-    throw new HttpError(400, 'Unable to verify the document.', 'VERIFICATION_FAILED')
+export async function reviewFileDocument(
+  auth: AuthContext,
+  leadId: string,
+  documentId: string,
+  meta: AuditMeta,
+) {
+  assertVerify(auth);
+  const { lead, file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const document = await loadDocument(file.id, documentId);
+  assertSensitive(auth, document.typeCode);
+  const latest = latestVersion(document.versions);
+  if (!latest)
+    throw httpError.validation({ documentId: "Please select a document." });
+  if (document.status !== "RECEIVED" && document.status !== "UNDER_REVIEW") {
+    throw new HttpError(
+      400,
+      "Unable to verify the document.",
+      "VERIFICATION_FAILED",
+    );
   }
-  await prisma.fileDocument.update({ where: { id: document.id }, data: { status: 'UNDER_REVIEW' } })
+  await prisma.fileDocument.update({
+    where: { id: document.id },
+    data: { status: "UNDER_REVIEW" },
+  });
   await recordActivity({
     documentId: document.id,
-    action: 'REVIEW_STARTED',
+    action: "REVIEW_STARTED",
     userId: auth.user.id,
-  })
+  });
   await recordLeadTimeline({
     leadId: lead.id,
     leadName: lead.name,
     userId: auth.user.id,
-    type: 'OTHER',
+    type: "OTHER",
     notes: `${document.typeNameSnapshot} is under review.`,
     meta,
     metadata: { documentId: document.id, fileId: file.id },
-  })
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_DOCUMENT_REVIEW_STARTED',
-    entityType: 'file_document',
+    action: "FILE_DOCUMENT_REVIEW_STARTED",
+    entityType: "file_document",
     entityId: document.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { fileCode: file.code, typeName: document.typeNameSnapshot },
-  })
-  return { document: serializeDocument(await loadDocument(file.id, document.id)) }
+  });
+  return {
+    document: serializeDocument(await loadDocument(file.id, document.id)),
+  };
 }
 
 export async function verifyFileDocument(
@@ -1176,20 +1645,32 @@ export async function verifyFileDocument(
   body: Record<string, unknown>,
   meta: AuditMeta,
 ) {
-  assertVerify(auth)
-  const { lead, file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const document = await loadDocument(file.id, documentId)
-  assertSensitive(auth, document.typeCode)
-  const latest = latestVersion(document.versions)
-  if (!latest) throw new HttpError(400, 'Unable to verify the document.', 'VERIFICATION_FAILED')
+  assertVerify(auth);
+  const { lead, file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const document = await loadDocument(file.id, documentId);
+  assertSensitive(auth, document.typeCode);
+  const latest = latestVersion(document.versions);
+  if (!latest)
+    throw new HttpError(
+      400,
+      "Unable to verify the document.",
+      "VERIFICATION_FAILED",
+    );
   if (isVersionExpired(latest)) {
-    throw httpError.validation({ expiryDate: 'This document has expired.' }, 'This document has expired.')
+    throw httpError.validation(
+      { expiryDate: "This document has expired." },
+      "This document has expired.",
+    );
   }
-  if (document.status !== 'RECEIVED' && document.status !== 'UNDER_REVIEW') {
-    throw new HttpError(400, 'Unable to verify the document.', 'VERIFICATION_FAILED')
+  if (document.status !== "RECEIVED" && document.status !== "UNDER_REVIEW") {
+    throw new HttpError(
+      400,
+      "Unable to verify the document.",
+      "VERIFICATION_FAILED",
+    );
   }
-  const remarks = asString(body.remarks)
+  const remarks = asString(body.remarks);
   try {
     await prisma.fileDocumentVersion.update({
       where: { id: latest.id },
@@ -1198,43 +1679,52 @@ export async function verifyFileDocument(
         verifiedAt: new Date(),
         verificationRemarks: remarks || null,
       },
-    })
-    await prisma.fileDocument.update({ where: { id: document.id }, data: { status: 'VERIFIED' } })
+    });
+    await prisma.fileDocument.update({
+      where: { id: document.id },
+      data: { status: "VERIFIED" },
+    });
   } catch (error) {
-    console.error('[file-documents] verify failed:', error)
-    throw new HttpError(400, 'Unable to verify the document.', 'VERIFICATION_FAILED')
+    console.error("[file-documents] verify failed:", error);
+    throw new HttpError(
+      400,
+      "Unable to verify the document.",
+      "VERIFICATION_FAILED",
+    );
   }
   await recordActivity({
     documentId: document.id,
-    action: 'VERIFIED',
+    action: "VERIFIED",
     userId: auth.user.id,
     notes: remarks || null,
-  })
+  });
   await recordLeadTimeline({
     leadId: lead.id,
     leadName: lead.name,
     userId: auth.user.id,
-    type: 'OTHER',
+    type: "OTHER",
     notes: `Document verified: ${document.typeNameSnapshot}`,
-    outcome: 'Document verified',
+    outcome: "Document verified",
     meta,
     metadata: {
-      event: 'FILE_DOCUMENT_VERIFIED',
+      event: "FILE_DOCUMENT_VERIFIED",
       documentId: document.id,
       fileId: file.id,
     },
-  })
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_DOCUMENT_VERIFIED',
-    entityType: 'file_document',
+    action: "FILE_DOCUMENT_VERIFIED",
+    entityType: "file_document",
     entityId: document.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { fileCode: file.code, typeName: document.typeNameSnapshot },
-  })
-  await refreshReadiness(file.id)
-  return { document: serializeDocument(await loadDocument(file.id, document.id)) }
+  });
+  await refreshReadiness(file.id);
+  return {
+    document: serializeDocument(await loadDocument(file.id, document.id)),
+  };
 }
 
 export async function rejectFileDocument(
@@ -1244,68 +1734,84 @@ export async function rejectFileDocument(
   body: Record<string, unknown>,
   meta: AuditMeta,
 ) {
-  assertVerify(auth)
-  const { lead, file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const document = await loadDocument(file.id, documentId)
-  assertSensitive(auth, document.typeCode)
-  const latest = latestVersion(document.versions)
-  if (!latest) throw httpError.validation({ documentId: 'Please select a document.' })
-  const reasonCode = asString(body.reasonCode || body.reason).toUpperCase()
-  const reasonText = asString(body.reason)
+  assertVerify(auth);
+  const { lead, file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const document = await loadDocument(file.id, documentId);
+  assertSensitive(auth, document.typeCode);
+  const latest = latestVersion(document.versions);
+  if (!latest)
+    throw httpError.validation({ documentId: "Please select a document." });
+  const reasonCode = asString(body.reasonCode || body.reason).toUpperCase();
+  const reasonText = asString(body.reason);
   if (!reasonCode && !reasonText) {
-    throw httpError.validation({ reason: 'Please provide a rejection reason.' }, 'Please provide a rejection reason.')
+    throw httpError.validation(
+      { reason: "Please provide a rejection reason." },
+      "Please provide a rejection reason.",
+    );
   }
   const master = reasonCode
     ? await prisma.masterDataItem.findFirst({
-        where: { categoryKey: 'REJECTION_REASON', code: reasonCode, status: 'ACTIVE' },
+        where: {
+          categoryKey: "REJECTION_REASON",
+          code: reasonCode,
+          status: "ACTIVE",
+        },
       })
-    : null
+    : null;
   if (!master && !reasonText) {
-    throw httpError.validation({ reason: 'Please provide a rejection reason.' }, 'Please provide a rejection reason.')
+    throw httpError.validation(
+      { reason: "Please provide a rejection reason." },
+      "Please provide a rejection reason.",
+    );
   }
-  const remarks = asString(body.remarks)
+  const remarks = asString(body.remarks);
   await prisma.fileDocumentVersion.update({
     where: { id: latest.id },
     data: {
-      rejectionReasonCode: master?.code || reasonCode || 'OTHER',
+      rejectionReasonCode: master?.code || reasonCode || "OTHER",
       rejectionReasonName: master?.name || reasonText,
       rejectionRemarks: remarks || null,
     },
-  })
-  await prisma.fileDocument.update({ where: { id: document.id }, data: { status: 'REUPLOAD_REQUIRED' } })
+  });
+  await prisma.fileDocument.update({
+    where: { id: document.id },
+    data: { status: "REUPLOAD_REQUIRED" },
+  });
   await recordActivity({
     documentId: document.id,
-    action: 'REJECTED',
+    action: "REJECTED",
     userId: auth.user.id,
     notes: remarks || master?.name || reasonText,
     metadata: { reason: master?.name || reasonText },
-  })
+  });
   await recordLeadTimeline({
     leadId: lead.id,
     leadName: lead.name,
     userId: auth.user.id,
-    type: 'OTHER',
+    type: "OTHER",
     notes: `Document rejected: ${document.typeNameSnapshot} — ${master?.name || reasonText}`,
-    outcome: 'Document rejected',
+    outcome: "Document rejected",
     meta,
     metadata: {
-      event: 'FILE_DOCUMENT_REJECTED',
+      event: "FILE_DOCUMENT_REJECTED",
       documentId: document.id,
       fileId: file.id,
     },
-  })
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_DOCUMENT_REJECTED',
-    entityType: 'file_document',
+    action: "FILE_DOCUMENT_REJECTED",
+    entityType: "file_document",
     entityId: document.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { reason: master?.name || reasonText, fileCode: file.code },
-  })
-  await refreshReadiness(file.id)
-  return { document: serializeDocument(await loadDocument(file.id, document.id)) }
+  });
+  await refreshReadiness(file.id);
+  return {
+    document: serializeDocument(await loadDocument(file.id, document.id)),
+  };
 }
 
 export async function setPrimaryAsset(
@@ -1315,72 +1821,96 @@ export async function setPrimaryAsset(
   assetId: string,
   meta: AuditMeta,
 ) {
-  assertUpload(auth)
-  const { file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const document = await loadDocument(file.id, documentId)
-  const latest = latestVersion(document.versions)
-  const asset = latest?.assets.find((item) => item.id === assetId)
-  if (!latest || !asset) throw httpError.notFound('File not found.')
-  await prisma.fileDocumentAsset.updateMany({ where: { versionId: latest.id }, data: { isPrimary: false } })
-  await prisma.fileDocumentAsset.update({ where: { id: asset.id }, data: { isPrimary: true } })
+  assertUpload(auth);
+  const { file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const document = await loadDocument(file.id, documentId);
+  const latest = latestVersion(document.versions);
+  const asset = latest?.assets.find((item) => item.id === assetId);
+  if (!latest || !asset) throw httpError.notFound("File not found.");
+  await prisma.fileDocumentAsset.updateMany({
+    where: { versionId: latest.id },
+    data: { isPrimary: false },
+  });
+  await prisma.fileDocumentAsset.update({
+    where: { id: asset.id },
+    data: { isPrimary: true },
+  });
   await recordActivity({
     documentId: document.id,
-    action: 'PRIMARY_MARKED',
+    action: "PRIMARY_MARKED",
     userId: auth.user.id,
     notes: asset.fileName,
-  })
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_DOCUMENT_PRIMARY_SET',
-    entityType: 'file_document',
+    action: "FILE_DOCUMENT_PRIMARY_SET",
+    entityType: "file_document",
     entityId: document.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { assetId: asset.id, fileName: asset.fileName },
-  })
-  return { document: serializeDocument(await loadDocument(file.id, document.id)) }
+  });
+  return {
+    document: serializeDocument(await loadDocument(file.id, document.id)),
+  };
 }
 
-export async function archiveFileDocument(auth: AuthContext, leadId: string, documentId: string, meta: AuditMeta) {
-  assertManage(auth)
-  const { lead, file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const document = await loadDocument(file.id, documentId)
+export async function archiveFileDocument(
+  auth: AuthContext,
+  leadId: string,
+  documentId: string,
+  meta: AuditMeta,
+) {
+  assertManage(auth);
+  const { lead, file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const document = await loadDocument(file.id, documentId);
   await prisma.fileDocument.update({
     where: { id: document.id },
-    data: { status: 'ARCHIVED', archivedAt: new Date() },
-  })
-  await recordActivity({ documentId: document.id, action: 'ARCHIVED', userId: auth.user.id })
+    data: { status: "ARCHIVED", archivedAt: new Date() },
+  });
+  await recordActivity({
+    documentId: document.id,
+    action: "ARCHIVED",
+    userId: auth.user.id,
+  });
   await recordLeadTimeline({
     leadId: lead.id,
     leadName: lead.name,
     userId: auth.user.id,
-    type: 'OTHER',
+    type: "OTHER",
     notes: `Document archived: ${document.typeNameSnapshot}`,
-    outcome: 'Document archived',
+    outcome: "Document archived",
     meta,
     metadata: {
-      event: 'FILE_DOCUMENT_ARCHIVED',
+      event: "FILE_DOCUMENT_ARCHIVED",
       documentId: document.id,
       fileId: file.id,
     },
-  })
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: 'FILE_DOCUMENT_ARCHIVED',
-    entityType: 'file_document',
+    action: "FILE_DOCUMENT_ARCHIVED",
+    entityType: "file_document",
     entityId: document.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
     metadata: { fileCode: file.code, typeName: document.typeNameSnapshot },
-  })
-  await refreshReadiness(file.id)
-  return { message: 'Document archived.', document: serializeDocument(await loadDocument(file.id, document.id)) }
+  });
+  await refreshReadiness(file.id);
+  return {
+    message: "Document archived.",
+    document: serializeDocument(await loadDocument(file.id, document.id)),
+  };
 }
 
 export async function deleteFileDocument() {
-  throw new HttpError(409, 'This document cannot be permanently deleted.', 'DELETE_RESTRICTED')
+  throw new HttpError(
+    409,
+    "This document cannot be permanently deleted.",
+    "DELETE_RESTRICTED",
+  );
 }
 
 export async function getFileDocumentContent(
@@ -1388,99 +1918,121 @@ export async function getFileDocumentContent(
   leadId: string,
   documentId: string,
   assetId: string | undefined,
-  meta: AuditMeta & { mode: 'view' | 'download' },
+  meta: AuditMeta & { mode: "view" | "download" },
 ) {
-  if (meta.mode === 'download') {
-    if (!hasPermission(auth.permissions, 'document:download')) {
-      throw httpError.accessDenied('You are not authorized to access this document.')
+  if (meta.mode === "download") {
+    if (!hasPermission(auth.permissions, "document:download")) {
+      throw httpError.accessDenied(
+        "You are not authorized to access this document.",
+      );
     }
   } else {
-    assertDownload(auth)
+    assertDownload(auth);
   }
-  const { file } = await fileContext(auth, leadId)
-  if (!file) throw httpError.notFound('File not found.')
-  const document = await loadDocument(file.id, documentId)
-  assertSensitive(auth, document.typeCode)
-  const latest = latestVersion(document.versions)
-  const asset = (assetId ? latest?.assets.find((item) => item.id === assetId) : null) || latest?.assets.find((item) => item.isPrimary) || latest?.assets[0]
-  if (!asset) throw httpError.notFound('File not found.')
-  const buffer = await readFileDocumentAsset(asset.storageKey)
+  const { file } = await fileContext(auth, leadId);
+  if (!file) throw httpError.notFound("File not found.");
+  const document = await loadDocument(file.id, documentId);
+  assertSensitive(auth, document.typeCode);
+  const latest = latestVersion(document.versions);
+  const asset =
+    (assetId ? latest?.assets.find((item) => item.id === assetId) : null) ||
+    latest?.assets.find((item) => item.isPrimary) ||
+    latest?.assets[0];
+  if (!asset) throw httpError.notFound("File not found.");
+  const buffer = await readFileDocumentAsset(asset.storageKey);
   await recordActivity({
     documentId: document.id,
-    action: meta.mode === 'download' ? 'DOWNLOADED' : 'VIEWED',
+    action: meta.mode === "download" ? "DOWNLOADED" : "VIEWED",
     userId: auth.user.id,
     notes: asset.fileName,
-  })
+  });
   await writeAuditLog({
     userId: auth.user.id,
-    action: meta.mode === 'download' ? 'FILE_DOCUMENT_DOWNLOADED' : 'FILE_DOCUMENT_VIEWED',
-    entityType: 'file_document',
+    action:
+      meta.mode === "download"
+        ? "FILE_DOCUMENT_DOWNLOADED"
+        : "FILE_DOCUMENT_VIEWED",
+    entityType: "file_document",
     entityId: document.id,
     ipAddress: meta.ipAddress,
     userAgent: meta.userAgent,
-    metadata: { assetId: asset.id, fileName: asset.fileName, fileCode: file.code },
-  })
-  return { buffer, fileName: asset.fileName, mimeType: asset.mimeType }
+    metadata: {
+      assetId: asset.id,
+      fileName: asset.fileName,
+      fileCode: file.code,
+    },
+  });
+  return { buffer, fileName: asset.fileName, mimeType: asset.mimeType };
 }
 
 export async function listGlobalFileDocuments(
   auth: AuthContext,
   query: {
-    search?: string
-    categoryCode?: string
-    typeCode?: string
-    status?: string
-    queue?: string
-    uploadedById?: string
-    verifiedById?: string
-    expiryStatus?: string
-    dateFrom?: string
-    dateTo?: string
-    page?: number
-    limit?: number
+    search?: string;
+    categoryCode?: string;
+    typeCode?: string;
+    status?: string;
+    queue?: string;
+    uploadedById?: string;
+    verifiedById?: string;
+    expiryStatus?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    limit?: number;
   },
 ) {
-  assertView(auth)
-  const page = Math.max(1, query.page || 1)
-  const limit = Math.min(100, Math.max(5, query.limit || 20))
-  const search = query.search?.trim().toLowerCase()
-  const queue = (query.queue || '').trim().toLowerCase()
-  const statusFilter = (query.status || '').trim().toUpperCase()
+  assertView(auth);
+  const page = Math.max(1, query.page || 1);
+  const limit = Math.min(100, Math.max(5, query.limit || 20));
+  const search = query.search?.trim().toLowerCase();
+  const queue = (query.queue || "").trim().toLowerCase();
+  const statusFilter = (query.status || "").trim().toUpperCase();
 
   const queueStatusMap: Record<string, FileDocumentStatus[]> = {
-    not_requested: ['NOT_REQUESTED'],
-    requested: ['REQUESTED'],
-    pending_review: ['RECEIVED', 'UNDER_REVIEW'],
-    rejected: ['REJECTED', 'REUPLOAD_REQUIRED'],
-    verified: ['VERIFIED'],
-  }
+    not_requested: ["NOT_REQUESTED"],
+    requested: ["REQUESTED"],
+    pending_review: ["RECEIVED", "UNDER_REVIEW"],
+    rejected: ["REJECTED", "REUPLOAD_REQUIRED"],
+    verified: ["VERIFIED"],
+  };
 
   const statusIn =
     queue && queueStatusMap[queue]
       ? queueStatusMap[queue]
       : statusFilter
         ? [statusFilter as FileDocumentStatus]
-        : undefined
+        : undefined;
 
   const dateToBound = (() => {
-    if (!query.dateTo) return undefined
-    const to = new Date(query.dateTo)
-    if (Number.isNaN(to.getTime())) return undefined
-    to.setHours(23, 59, 59, 999)
-    return to
-  })()
+    if (!query.dateTo) return undefined;
+    const to = new Date(query.dateTo);
+    if (Number.isNaN(to.getTime())) return undefined;
+    to.setHours(23, 59, 59, 999);
+    return to;
+  })();
 
   const rows = await prisma.fileDocument.findMany({
     where: {
       archivedAt: null,
-      ...(query.categoryCode ? { categoryCode: query.categoryCode.toUpperCase() } : {}),
+      ...(query.categoryCode
+        ? { categoryCode: query.categoryCode.toUpperCase() }
+        : {}),
       ...(query.typeCode ? { typeCode: query.typeCode.toUpperCase() } : {}),
       ...(statusIn ? { status: { in: statusIn } } : {}),
       ...(query.uploadedById
-        ? { versions: { some: { isLatest: true, uploadedById: query.uploadedById } } }
+        ? {
+            versions: {
+              some: { isLatest: true, uploadedById: query.uploadedById },
+            },
+          }
         : {}),
       ...(query.verifiedById
-        ? { versions: { some: { isLatest: true, verifiedById: query.verifiedById } } }
+        ? {
+            versions: {
+              some: { isLatest: true, verifiedById: query.verifiedById },
+            },
+          }
         : {}),
       ...(query.dateFrom || dateToBound
         ? {
@@ -1508,45 +2060,47 @@ export async function listGlobalFileDocuments(
         take: 1,
       },
     },
-    orderBy: { updatedAt: 'desc' },
+    orderBy: { updatedAt: "desc" },
     take: 2000,
-  })
+  });
 
   type MappedRow = {
-    id: string
-    code: string
-    fileId: string
-    fileCode: string
-    leadId: string
-    leadCode: string
-    owner: string
-    leadName: string
-    type: string
-    typeCode: string
-    category: string
-    categoryCode: string
-    requirement: 'REQUIRED' | 'OPTIONAL' | null
-    uploadedBy: string
-    uploadedById: string | null
-    verifiedBy: string
-    verifiedById: string | null
-    status: string
-    statusCode: string
-    expiryStatus: 'NONE' | 'VALID' | 'EXPIRING' | 'EXPIRED'
-    expiryDate: string | null
-    hasFile: boolean
-    assetCount: number
-    updated: string
-    createdAt: string
-    ageDays: number
-  }
+    id: string;
+    code: string;
+    fileId: string;
+    fileCode: string;
+    leadId: string;
+    leadCode: string;
+    owner: string;
+    leadName: string;
+    type: string;
+    typeCode: string;
+    category: string;
+    categoryCode: string;
+    requirement: "REQUIRED" | "OPTIONAL" | null;
+    uploadedBy: string;
+    uploadedById: string | null;
+    verifiedBy: string;
+    verifiedById: string | null;
+    status: string;
+    statusCode: string;
+    expiryStatus: "NONE" | "VALID" | "EXPIRING" | "EXPIRED";
+    expiryDate: string | null;
+    hasFile: boolean;
+    assetCount: number;
+    updated: string;
+    createdAt: string;
+    ageDays: number;
+  };
 
-  const now = Date.now()
+  const now = Date.now();
   let items: MappedRow[] = rows.map((row) => {
-    const latest = row.versions[0] || null
-    const expired = expiryState(latest?.expiryDate)
+    const latest = row.versions[0] || null;
+    const expired = expiryState(latest?.expiryDate);
     const effectiveStatus =
-      expired === 'EXPIRED' && row.status === 'VERIFIED' ? 'Expired' : statusLabel(row.status)
+      expired === "EXPIRED" && row.status === "VERIFIED"
+        ? "Expired"
+        : statusLabel(row.status);
     return {
       id: row.id,
       code: row.code,
@@ -1561,24 +2115,29 @@ export async function listGlobalFileDocuments(
       category: row.categoryNameSnapshot,
       categoryCode: row.categoryCode,
       requirement: row.requirement,
-      uploadedBy: latest?.uploadedBy?.fullName || '—',
+      uploadedBy: latest?.uploadedBy?.fullName || "—",
       uploadedById: latest?.uploadedById || null,
-      verifiedBy: latest?.verifiedBy?.fullName || '—',
+      verifiedBy: latest?.verifiedBy?.fullName || "—",
       verifiedById: latest?.verifiedById || null,
       status: effectiveStatus,
       statusCode: row.status,
       expiryStatus: expired,
-      expiryDate: latest?.expiryDate ? latest.expiryDate.toISOString().slice(0, 10) : null,
+      expiryDate: latest?.expiryDate
+        ? latest.expiryDate.toISOString().slice(0, 10)
+        : null,
       hasFile: Boolean(latest?.assets?.length),
       assetCount: latest?.assets?.length || 0,
       updated: row.updatedAt.toISOString(),
       createdAt: latest?.createdAt.toISOString() || row.createdAt.toISOString(),
-      ageDays: Math.max(0, Math.floor((now - row.updatedAt.getTime()) / 86_400_000)),
-    }
-  })
+      ageDays: Math.max(
+        0,
+        Math.floor((now - row.updatedAt.getTime()) / 86_400_000),
+      ),
+    };
+  });
 
   if (!canAccessSensitive(auth)) {
-    items = items.filter((row) => !SENSITIVE_TYPES.has(row.typeCode))
+    items = items.filter((row) => !SENSITIVE_TYPES.has(row.typeCode));
   }
 
   const summarySource = (
@@ -1590,58 +2149,76 @@ export async function listGlobalFileDocuments(
         typeCode: true,
         versions: {
           where: { isLatest: true },
-          select: { expiryDate: true, assets: { select: { id: true }, take: 1 } },
+          select: {
+            expiryDate: true,
+            assets: { select: { id: true }, take: 1 },
+          },
           take: 1,
         },
       },
       take: 5000,
     })
   )
-    .filter((row) => canAccessSensitive(auth) || !SENSITIVE_TYPES.has(row.typeCode))
+    .filter(
+      (row) => canAccessSensitive(auth) || !SENSITIVE_TYPES.has(row.typeCode),
+    )
     .map((row) => {
-      const latest = row.versions[0] || null
+      const latest = row.versions[0] || null;
       return {
         statusCode: row.status,
         requirement: row.requirement,
         expiryStatus: expiryState(latest?.expiryDate),
         hasFile: Boolean(latest?.assets?.length),
-      }
-    })
+      };
+    });
 
   const summary = {
     total: summarySource.length,
-    notRequested: summarySource.filter((row) => row.statusCode === 'NOT_REQUESTED').length,
-    requested: summarySource.filter((row) => row.statusCode === 'REQUESTED').length,
+    notRequested: summarySource.filter(
+      (row) => row.statusCode === "NOT_REQUESTED",
+    ).length,
+    requested: summarySource.filter((row) => row.statusCode === "REQUESTED")
+      .length,
     pendingReview: summarySource.filter(
-      (row) => row.statusCode === 'RECEIVED' || row.statusCode === 'UNDER_REVIEW',
+      (row) =>
+        row.statusCode === "RECEIVED" || row.statusCode === "UNDER_REVIEW",
     ).length,
     verified: summarySource.filter(
-      (row) => row.statusCode === 'VERIFIED' && row.expiryStatus !== 'EXPIRED',
+      (row) => row.statusCode === "VERIFIED" && row.expiryStatus !== "EXPIRED",
     ).length,
     rejected: summarySource.filter(
-      (row) => row.statusCode === 'REJECTED' || row.statusCode === 'REUPLOAD_REQUIRED',
+      (row) =>
+        row.statusCode === "REJECTED" || row.statusCode === "REUPLOAD_REQUIRED",
     ).length,
     missing: summarySource.filter(
       (row) =>
-        row.requirement === 'REQUIRED' &&
-        (!row.hasFile || row.statusCode === 'NOT_REQUESTED' || row.statusCode === 'REQUESTED'),
+        row.requirement === "REQUIRED" &&
+        (!row.hasFile ||
+          row.statusCode === "NOT_REQUESTED" ||
+          row.statusCode === "REQUESTED"),
     ).length,
-    expiring: summarySource.filter((row) => row.expiryStatus === 'EXPIRING').length,
-    expired: summarySource.filter((row) => row.expiryStatus === 'EXPIRED').length,
-  }
+    expiring: summarySource.filter((row) => row.expiryStatus === "EXPIRING")
+      .length,
+    expired: summarySource.filter((row) => row.expiryStatus === "EXPIRED")
+      .length,
+  };
 
   if (query.expiryStatus) {
-    const wanted = query.expiryStatus.toUpperCase()
-    items = items.filter((row) => row.expiryStatus === wanted)
+    const wanted = query.expiryStatus.toUpperCase();
+    items = items.filter((row) => row.expiryStatus === wanted);
   }
-  if (queue === 'expiring') items = items.filter((row) => row.expiryStatus === 'EXPIRING')
-  if (queue === 'expired') items = items.filter((row) => row.expiryStatus === 'EXPIRED')
-  if (queue === 'missing') {
+  if (queue === "expiring")
+    items = items.filter((row) => row.expiryStatus === "EXPIRING");
+  if (queue === "expired")
+    items = items.filter((row) => row.expiryStatus === "EXPIRED");
+  if (queue === "missing") {
     items = items.filter(
       (row) =>
-        row.requirement === 'REQUIRED' &&
-        (!row.hasFile || row.statusCode === 'NOT_REQUESTED' || row.statusCode === 'REQUESTED'),
-    )
+        row.requirement === "REQUIRED" &&
+        (!row.hasFile ||
+          row.statusCode === "NOT_REQUESTED" ||
+          row.statusCode === "REQUESTED"),
+    );
   }
   if (search) {
     items = items.filter((row) =>
@@ -1656,79 +2233,97 @@ export async function listGlobalFileDocuments(
         row.verifiedBy,
         row.status,
       ]
-        .join(' ')
+        .join(" ")
         .toLowerCase()
         .includes(search),
-    )
+    );
   }
 
   const actionScore = (row: MappedRow) => {
-    const requiredBoost = row.requirement === 'REQUIRED' ? 0 : 40
-    let statusScore = 50
+    const requiredBoost = row.requirement === "REQUIRED" ? 0 : 40;
+    let statusScore = 50;
     const missingRequired =
-      row.requirement === 'REQUIRED' &&
-      (!row.hasFile || row.statusCode === 'NOT_REQUESTED' || row.statusCode === 'REQUESTED')
-    if (missingRequired || row.statusCode === 'NOT_REQUESTED') statusScore = 0
-    else if (row.statusCode === 'REJECTED' || row.statusCode === 'REUPLOAD_REQUIRED') statusScore = 5
-    else if (row.statusCode === 'REQUESTED') statusScore = 10
-    else if (row.statusCode === 'RECEIVED') statusScore = 15
-    else if (row.statusCode === 'UNDER_REVIEW') statusScore = 18
-    else if (row.expiryStatus === 'EXPIRED') statusScore = 20
-    else if (row.expiryStatus === 'EXPIRING') statusScore = 25
-    else if (row.statusCode === 'VERIFIED') statusScore = 80
-    else if (row.statusCode === 'ARCHIVED') statusScore = 90
-    return requiredBoost + statusScore
-  }
+      row.requirement === "REQUIRED" &&
+      (!row.hasFile ||
+        row.statusCode === "NOT_REQUESTED" ||
+        row.statusCode === "REQUESTED");
+    if (missingRequired || row.statusCode === "NOT_REQUESTED") statusScore = 0;
+    else if (
+      row.statusCode === "REJECTED" ||
+      row.statusCode === "REUPLOAD_REQUIRED"
+    )
+      statusScore = 5;
+    else if (row.statusCode === "REQUESTED") statusScore = 10;
+    else if (row.statusCode === "RECEIVED") statusScore = 15;
+    else if (row.statusCode === "UNDER_REVIEW") statusScore = 18;
+    else if (row.expiryStatus === "EXPIRED") statusScore = 20;
+    else if (row.expiryStatus === "EXPIRING") statusScore = 25;
+    else if (row.statusCode === "VERIFIED") statusScore = 80;
+    else if (row.statusCode === "ARCHIVED") statusScore = 90;
+    return requiredBoost + statusScore;
+  };
   items.sort((a, b) => {
-    const diff = actionScore(a) - actionScore(b)
-    if (diff !== 0) return diff
-    return b.updated.localeCompare(a.updated)
-  })
+    const diff = actionScore(a) - actionScore(b);
+    if (diff !== 0) return diff;
+    return b.updated.localeCompare(a.updated);
+  });
 
-  const total = items.length
+  const total = items.length;
   return {
     items: items.slice((page - 1) * limit, page * limit),
     total,
     page,
     limit,
     summary,
-  }
+  };
 }
 
 export async function listRejectionReasons() {
   const rows = await prisma.masterDataItem.findMany({
-    where: { categoryKey: 'REJECTION_REASON', status: 'ACTIVE' },
-    orderBy: { sortOrder: 'asc' },
+    where: { categoryKey: "REJECTION_REASON", status: "ACTIVE" },
+    orderBy: { sortOrder: "asc" },
     select: { code: true, name: true },
-  })
-  return rows.map((row) => ({ code: row.code, name: row.name }))
+  });
+  return rows.map((row) => ({ code: row.code, name: row.name }));
 }
 
 export async function remindExpiringFileDocuments(days = reminderDays()) {
-  const today = startOfToday()
-  const until = new Date(today)
-  until.setDate(until.getDate() + days)
+  const today = startOfToday();
+  const until = new Date(today);
+  until.setDate(until.getDate() + days);
   const versions = await prisma.fileDocumentVersion.findMany({
     where: { isLatest: true, expiryDate: { gte: today, lte: until } },
     include: {
-      document: { include: { file: { select: { id: true, code: true, ownerId: true, leadId: true, studentName: true } } } },
+      document: {
+        include: {
+          file: {
+            select: {
+              id: true,
+              code: true,
+              ownerId: true,
+              leadId: true,
+              studentName: true,
+            },
+          },
+        },
+      },
     },
-  })
-  let sent = 0
+  });
+  let sent = 0;
   for (const version of versions) {
-    const ownerId = version.document.file.ownerId
-    if (!ownerId || !version.expiryDate) continue
-    const name = version.document.typeNameSnapshot
+    const ownerId = version.document.file.ownerId;
+    if (!ownerId || !version.expiryDate) continue;
+    const name = version.document.typeNameSnapshot;
     await createNotification({
       userId: ownerId,
       title: `${name} expires in ${days} days`,
       body: `${version.document.file.code} — ${name} expires on ${version.expiryDate.toISOString().slice(0, 10)}.`,
       link: `/leads/${version.document.file.leadId}?tab=file-documents`,
-      type: 'document_expiring',
+      type: "document_expiring",
       leadId: version.document.file.leadId,
       dedupeKey: `file-doc-expiry:${version.id}:${days}`,
-    })
-    sent += 1
+    });
+    sent += 1;
   }
-  return sent
+  return sent;
 }

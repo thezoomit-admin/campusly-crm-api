@@ -107,17 +107,16 @@ export async function countUnreadNotifications(userId: string, kind?: "system" |
   });
 }
 
-export function pushNotificationCreated(userId: string, row: NotificationRow) {
-  void countUnreadNotifications(userId)
-    .then((unreadCount) => {
-      emitNotificationCreated(userId, {
-        notification: serializeNotification(row),
-        unreadCount,
-      });
-    })
-    .catch((error) => {
-      console.error("[socket] Failed to emit notification:created", error);
+export async function pushNotificationCreated(userId: string, row: NotificationRow) {
+  try {
+    const unreadCount = await countUnreadNotifications(userId);
+    emitNotificationCreated(userId, {
+      notification: serializeNotification(row),
+      unreadCount,
     });
+  } catch (error) {
+    console.error("[socket] Failed to emit notification:created", error);
+  }
 }
 
 const notificationInclude = {
@@ -150,9 +149,9 @@ export async function createNotification(input: {
       include: notificationInclude,
     });
     if (existing) {
-      // Re-emit so a connected client still gets toast/bell if the first emit was missed.
+      // Re-emit so a connected client still gets the bell update if the first emit was missed.
       if (existing.status === "Unread") {
-        pushNotificationCreated(input.userId, existing);
+        await pushNotificationCreated(input.userId, existing);
       }
       return existing;
     }
@@ -190,7 +189,7 @@ export async function createNotification(input: {
     include: notificationInclude,
   });
 
-  pushNotificationCreated(input.userId, created);
+  await pushNotificationCreated(input.userId, created);
   return created;
 }
 
