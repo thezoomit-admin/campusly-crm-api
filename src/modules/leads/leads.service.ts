@@ -364,6 +364,10 @@ function listItem(
     country: lead.country || "—",
     source: lead.source || "—",
     owner: lead.owner?.fullName || lead.ownerName || "—",
+    ownerId: lead.owner?.id || null,
+    ownerPhotoUrl: lead.owner
+      ? versionedUserPhotoUrl(lead.owner.photoUrl, lead.owner.updatedAt)
+      : null,
     status: lead.status,
     priority: scored.priority || "—",
     score: String(scored.score),
