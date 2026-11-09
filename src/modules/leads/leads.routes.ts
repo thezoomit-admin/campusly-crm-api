@@ -128,6 +128,7 @@ leadsRouter.get("/", requireAuth, async (req, res, next) => {
         priority: queryString(req.query.priority),
         country: queryString(req.query.country),
         ownerId: queryString(req.query.ownerId),
+        view: queryString(req.query.view),
         duplicatesOnly:
           req.query.duplicatesOnly === "1" ||
           req.query.duplicatesOnly === "true" ||
@@ -252,6 +253,7 @@ leadsRouter.get(
         source: queryString(req.query.source),
         priority: queryString(req.query.priority),
         country: queryString(req.query.country),
+        view: queryString(req.query.view),
         duplicatesOnly:
           req.query.duplicatesOnly === "1" ||
           req.query.duplicatesOnly === "true" ||

@@ -1064,7 +1064,42 @@ type LeadListFilters = {
   country?: string;
   ownerId?: string;
   duplicatesOnly?: boolean;
+  /** Smart list views: all | unassigned | overdue | hot | no_follow_up */
+  view?: string;
 };
+
+function leadListViewWhere(
+  view: string | undefined,
+  now = new Date(),
+): Prisma.LeadWhereInput {
+  const key = view?.trim().toLowerCase() || "all";
+  if (key === "unassigned") return { ownerId: null };
+  if (key === "overdue") {
+    const startToday = startOfUtcDay(now);
+    return {
+      followUps: {
+        some: {
+          AND: [
+            openFollowUpWhere(),
+            { type: { not: "Meeting" } },
+            { dueAt: { lt: startToday } },
+          ],
+        },
+      },
+    };
+  }
+  if (key === "hot") {
+    return { priority: { equals: "High", mode: "insensitive" } };
+  }
+  if (key === "no_follow_up") {
+    return {
+      NOT: {
+        followUps: { some: nextFollowUpDateWhere() },
+      },
+    };
+  }
+  return {};
+}
 
 async function leadListFilter(auth: AuthContext, query: LeadListFilters) {
   const search = query.search?.trim();
@@ -1074,6 +1109,7 @@ async function leadListFilter(auth: AuthContext, query: LeadListFilters) {
   const country = query.country?.trim();
   const ownerId = query.ownerId?.trim();
   const duplicatesOnly = query.duplicatesOnly === true;
+  const view = query.view?.trim();
   const scope = leadScopeWhere(auth);
   const duplicatePhones = duplicatesOnly
     ? await duplicatePhoneNormalizedList()
@@ -1096,6 +1132,7 @@ async function leadListFilter(auth: AuthContext, query: LeadListFilters) {
       scope,
       { archivedAt: null },
       statusFilter,
+      leadListViewWhere(view),
       ownerId ? { ownerId } : {},
       source ? { source: { contains: source, mode: "insensitive" } } : {},
       priority ? { priority: { equals: priority, mode: "insensitive" } } : {},
@@ -1152,6 +1189,10 @@ export async function listLeads(
     AND: [scope, { archivedAt: null }, closedLeadsWhere()],
   };
 
+  const viewBase: Prisma.LeadWhereInput = {
+    AND: [scope, { archivedAt: null }, activePipelineLeadsWhere()],
+  };
+
   const [
     total,
     rows,
@@ -1164,6 +1205,10 @@ export async function listLeads(
     closedCount,
     closedLast30,
     closedPrev30,
+    unassignedCount,
+    overdueCount,
+    hotCount,
+    noFollowUpCount,
   ] = await Promise.all([
     prisma.lead.count({ where: listWhere }),
     prisma.lead.findMany({
@@ -1202,6 +1247,18 @@ export async function listLeads(
     prisma.lead.count({
       where: { AND: [closedScope, { createdAt: { gte: prev30, lt: last30 } }] },
     }),
+    prisma.lead.count({
+      where: { AND: [viewBase, leadListViewWhere("unassigned", now)] },
+    }),
+    prisma.lead.count({
+      where: { AND: [viewBase, leadListViewWhere("overdue", now)] },
+    }),
+    prisma.lead.count({
+      where: { AND: [viewBase, leadListViewWhere("hot", now)] },
+    }),
+    prisma.lead.count({
+      where: { AND: [viewBase, leadListViewWhere("no_follow_up", now)] },
+    }),
   ]);
 
   const currentMap = countByStatus(statusCounts);
@@ -1234,6 +1291,13 @@ export async function listLeads(
           change: percentChange(closedLast30, closedPrev30),
         },
       ],
+      views: {
+        all: allCount,
+        unassigned: unassignedCount,
+        overdue: overdueCount,
+        hot: hotCount,
+        no_follow_up: noFollowUpCount,
+      },
     },
   };
 }
